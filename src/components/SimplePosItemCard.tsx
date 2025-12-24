@@ -1,0 +1,84 @@
+// src/components/SimplePosItemCard.tsx
+
+import type { AddToCartPayload, POSItem } from "../types/catalog";
+import { formatMoney, parseDecimal } from "../helpers/posHelpers";
+
+interface SimplePosItemCardProps {
+  item: POSItem;
+  onAddToCart: (payload: AddToCartPayload) => void;
+  onClickItem?: (item: POSItem) => void;
+}
+
+export const SimplePosItemCard: React.FC<SimplePosItemCardProps> = ({
+  item,
+  onAddToCart,
+  onClickItem,
+}) => {
+  const stockQty = parseDecimal(item.stock_qty, 0);
+  const price = parseDecimal(item.price, 0);
+
+  const handleClick = () => {
+    if (onClickItem) {
+      onClickItem(item);
+      return;
+    }
+
+    onAddToCart({
+      item,
+      quantity: 1,        
+      customizations: [],
+    });
+  };
+
+  return (
+    <button
+      type="button"
+      className="flex flex-col rounded-lg border border-kk-border bg-kk-pri-bg 
+                  p-3 text-left shadow-sm hover:shadow-md transition"
+      onClick={handleClick}
+    >
+      {/* Image placeholder */}
+      <div className="mb-2 flex h-28 w-full items-center justify-center rounded-lg 
+                      bg-kk-sec-bg text-[11px] text-kk-ter-text">
+        <span>No Image</span>
+      </div>
+
+      {/* Name + stock */}
+      <div className="mb-1 flex items-center justify-between gap-1">
+        <span className="line-clamp-2 text-[13px] font-medium text-kk-pri-text">
+          {item.name}
+        </span>
+        { item.inventory_tracking && stockQty > 0 && (
+          <span className="text-[10px] text-kk-hover">In stock</span>
+        )}
+
+        { item.inventory_tracking && stockQty === 0 && (
+          <span className="text-[10px] text-kk-err">Out</span>
+        )} 
+      </div>
+
+      {/* Optional description */}
+      {/* {item.description && (
+        <div className="mb-2 line-clamp-2 text-[11px] text-gray-500">
+          {item.description}
+        </div>
+      )} */}
+
+      {/* Price row */}
+      <div className="mt-auto flex items-center justify-between gap-2 pt-1">
+        <span className="text-[14px] font-semibold text-kk-acc">
+          {/* ₦{price.toFixed(0)} */}
+          {formatMoney(price)}
+        </span>
+
+        {/* “Custom” pill placeholder (you can gate this on item.customized later) */}
+        {item.customized && (
+          <span className="rounded-full border border-kk-border-strong 
+              px-3 py-[2px] text-[10px] text-kk-sec-text">
+            Custom
+          </span>
+        )} 
+      </div>
+    </button>
+  );
+};
