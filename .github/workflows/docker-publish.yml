@@ -29,6 +29,7 @@ jobs:
           push: true
           tags: |
             ghcr.io/${{ github.repository }}:latest
+            ghcr.io/${{ github.repository }}:sandbox
             ghcr.io/${{ github.repository }}:sha-${{ github.sha }}
           build-args: |
             VITE_API_BASE_URL=https://api.v1.krisskrossskate.com
@@ -51,3 +52,4 @@ jobs:
             cd /opt/krisskross
             docker compose pull
             docker compose up -d
+            docker compose -p sandbox up -d
