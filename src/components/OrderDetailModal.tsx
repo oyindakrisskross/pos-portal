@@ -70,22 +70,29 @@ export const OrderDetailModal: React.FC<OrderDetailModalProps> = ({
                     {formatMoney(ln.line_total)}
                   </span>
                 </div>
-                {ln.children.map((child) => (
-                  <div
-                    key={child.id}
-                    className="ml-4 flex justify-between text-[10px] text-kk-sec-text"
-                  >
-                    <span className="w-1/3">
-                      -{" "}
-                      {child.customization_label || child.item_name}
-                    </span>
-                    <span className="text-center">
-                      {child.quantity}
-                    </span>
-                    <span className="text-right">
-                      {formatMoney(child.line_total)}
-                    </span>
+                {parseFloat(ln.discount_amount ?? "0") > 0 && (
+                  <div className="ml-1 mt-0.5 flex justify-between text-[10px] text-kk-err">
+                    <span className="w-1/3">Discount</span>
+                    <span className="text-right">-{formatMoney(ln.discount_amount)}</span>
                   </div>
+                )}
+                {ln.children.map((child) => (
+                  <React.Fragment key={child.id}>
+                    <div className="ml-4 flex justify-between text-[10px] text-kk-sec-text">
+                      <span className="w-1/3">
+                        -{" "}
+                        {child.customization_label || child.item_name}
+                      </span>
+                      <span className="text-center">{child.quantity}</span>
+                      <span className="text-right">{formatMoney(child.line_total)}</span>
+                    </div>
+                    {parseFloat(child.discount_amount ?? "0") > 0 && (
+                      <div className="ml-6 flex justify-between text-[10px] text-kk-err">
+                        <span className="w-1/3">Discount</span>
+                        <span className="text-right">-{formatMoney(child.discount_amount)}</span>
+                      </div>
+                    )}
+                  </React.Fragment>
                 ))}
               </div>
             ))}
@@ -99,6 +106,19 @@ export const OrderDetailModal: React.FC<OrderDetailModalProps> = ({
                 <span>Tax (7.5% VAT)</span>
                 <span>{formatMoney(invoice.tax_total)}</span>
               </div>
+              {parseFloat(invoice.discount_total ?? "0") > 0 && (
+                <>
+                  <div className="flex justify-between text-kk-err">
+                    <span>Discount</span>
+                    <span>-{formatMoney(invoice.discount_total)}</span>
+                  </div>
+                  {invoice.coupon_code && (
+                    <div className="text-[10px] text-kk-sec-text">
+                      Code: {invoice.coupon_code}
+                    </div>
+                  )}
+                </>
+              )}
               <div className="mt-2 flex justify-between text-sm font-semibold">
                 <span>Total</span>
                 <span>{formatMoney(invoice.grand_total)}</span>

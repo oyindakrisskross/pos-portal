@@ -91,6 +91,7 @@ export interface AddToCartPayload {
 
 export interface CartLine extends AddToCartPayload {
   id: string;
+  promo?: boolean;
 }
 
 export interface CartPricingSummary {

@@ -4,19 +4,31 @@ const api = axios.create({
   baseURL: import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8000",
 });
 
-let accessToken: string | null = localStorage.getItem("kk_pos_access") || null;
-let refreshToken: string | null = localStorage.getItem("kk_pos_refresh") || null;
+const ACCESS_KEY = "kk_pos_access";
+const REFRESH_KEY = "kk_pos_refresh";
+
+// Security: POS sessions should not persist after closing the window/tab.
+// Use sessionStorage (cleared when the tab/window is closed) instead of localStorage.
+try {
+  localStorage.removeItem(ACCESS_KEY);
+  localStorage.removeItem(REFRESH_KEY);
+} catch {
+  // ignore (e.g. blocked storage)
+}
+
+let accessToken: string | null = sessionStorage.getItem(ACCESS_KEY) || null;
+let refreshToken: string | null = sessionStorage.getItem(REFRESH_KEY) || null;
 
 export const setAccessToken = (t: string | null) => {
   accessToken = t;
-  if (t) localStorage.setItem("kk_pos_access", t);
-  else localStorage.removeItem("kk_pos_access");
+  if (t) sessionStorage.setItem(ACCESS_KEY, t);
+  else sessionStorage.removeItem(ACCESS_KEY);
 };
 
 export const setRefreshToken = (t: string | null) => {
   refreshToken = t;
-  if (t) localStorage.setItem("kk_pos_refresh", t);
-  else localStorage.removeItem("kk_pos_refresh");
+  if (t) sessionStorage.setItem(REFRESH_KEY, t);
+  else sessionStorage.removeItem(REFRESH_KEY);
 };
 
 api.interceptors.request.use((config) => {
