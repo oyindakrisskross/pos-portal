@@ -6,12 +6,13 @@ import { useNavigate } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
 import { type Outlet } from "../types/auth";
 import { fetchOutlets } from "../api/auth";
+import { PinPad } from "../components/PinPad";
 
 export default function LoginPage() {
   const { login } = useAuth();
   const navigate = useNavigate();
   const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
+  const [pin, setPin] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [location, setLocation] = useState<number | null>(null);
@@ -21,8 +22,18 @@ export default function LoginPage() {
     e.preventDefault();
     setSubmitting(true);
     setError(null);
+    if (!location || location === 0) {
+      setSubmitting(false);
+      setError("Please select an Outlet.");
+      return;
+    }
+    if (pin.length !== 6) {
+      setSubmitting(false);
+      setError("Enter your 6-digit PIN.");
+      return;
+    }
     try {
-      await login(email, password, location!);
+      await login(email, pin, location!);
       navigate("/");
     } catch (err: any) {
       setError("Invalid credentials or server error.");
@@ -64,15 +75,16 @@ export default function LoginPage() {
               autoComplete="email"
             />
           </div>
-          <div className="space-y-1">
-            <label className="text-xs text-kk-ter-text">Password</label>
-            <input
-              className="w-full rounded-md border px-3 py-2 text-sm outline-none border-kk-border 
-                focus:border-kk-ter-bg bg-kk-ter-bg"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              type="password"
-              autoComplete="current-password"
+          <div className="space-y-2">
+            <label className="text-xs text-kk-ter-text">6-digit PIN</label>
+            <PinPad
+              value={pin}
+              maxLength={6}
+              disabled={submitting}
+              onChange={(next) => {
+                setError(null);
+                setPin(next.replace(/\D/g, "").slice(0, 6));
+              }}
             />
           </div>
           <div className="space-y-1">
@@ -80,8 +92,7 @@ export default function LoginPage() {
             <select
               className="w-full rounded-md border border-kk-border px-3 py-2 text-sm outline-none 
                 focus:border-kk-ter-bg"
-              value={location!}
-              defaultValue={0}
+              value={location ?? 0}
               onChange={(e) => setLocation(+e.target.value)}
             >
               <option key={0} value={0} disabled>Select an Outlet</option>

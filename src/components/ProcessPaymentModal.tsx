@@ -1,6 +1,6 @@
 // src/components/ProcessPaymentModal.tsx
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useState } from "react";
 import type { CartLine, CartPricingSummary } from "../types/catalog";
 import {
   buildPOSCheckoutRequest,
@@ -9,15 +9,16 @@ import {
   type BuildCheckoutContext,
   type PaymentMethodCode,
 } from "../helpers/invoiceHelpers";
-import type { InvoiceResponse } from "../types/invoice";
+import type { AppliedCoupon, InvoiceResponse } from "../types/invoice";
 import { checkOut, fetchPriceCart } from "../api/cart";
 import { formatMoney } from "../helpers/posHelpers";
-import { CreditCard, QrCode, Smartphone } from "lucide-react";
+import { CreditCard, Smartphone } from "lucide-react";
 
 interface ProcessPaymentModalProps {
   isOpen: boolean;
   locationId: number;
   cart: CartLine[];
+  appliedCoupon?: AppliedCoupon | null;
   onClose: () => void;
   onPaymentCompleted: (invoice: InvoiceResponse) => void;
 }
@@ -34,19 +35,20 @@ export const ProcessPaymentModal: React.FC<ProcessPaymentModalProps> = ({
   isOpen,
   locationId,
   cart,
+  appliedCoupon: appliedCouponProp,
   onClose,
   onPaymentCompleted,
 }) => {
   const [pricing, setPricing] = useState<CartPricingSummary | null>(null);
   const [pricingLoading, setPricingLoading] = useState(false);
   const [pricingError, setPricingError] = useState<string | null>(null);
+  const [appliedCoupon, setAppliedCoupon] = useState<AppliedCoupon | null>(
+    appliedCouponProp ?? null
+  );
 
   const [paymentMethod, setPaymentMethod] =
     useState<UiPaymentMethod>("POS_TERMINAL");
   const [amountPaid, setAmountPaid] = useState<string>("");
-  const [customAmount, setCustomAmount] = useState<string>("");
-  const [customerName, setCustomerName] = useState("");
-  const [customerPhone, setCustomerPhone] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
 
@@ -57,6 +59,7 @@ export const ProcessPaymentModal: React.FC<ProcessPaymentModalProps> = ({
     if (!isOpen || cartIsEmpty) {
       setPricing(null);
       setPricingError(null);
+      setAppliedCoupon(appliedCouponProp ?? null);
       return;
     }
 
@@ -69,16 +72,17 @@ export const ProcessPaymentModal: React.FC<ProcessPaymentModalProps> = ({
           cart, 
           locationId,
           "AMOUNT",
-          "0.00"
+          "0.00",
+          appliedCouponProp?.code ?? ""
         );
 
         const data = await fetchPriceCart(payload);
         const summary = parseCartPricingSummary(data);
         setPricing(summary);
+        setAppliedCoupon((data?.applied_coupon as AppliedCoupon) ?? null);
 
         // default quick amount: grand total
         setAmountPaid(summary.grandTotal.toString());
-        setCustomAmount("");
       } catch (err: any) {
         setPricingError(err.message || "Unable to price cart.");
       } finally {
@@ -87,7 +91,7 @@ export const ProcessPaymentModal: React.FC<ProcessPaymentModalProps> = ({
     };
 
     fetchPricing();
-  }, [isOpen, cart, cartIsEmpty, locationId]);
+  }, [isOpen, cart, cartIsEmpty, locationId, appliedCouponProp?.code]);
 
   // Buttons (grand total + a few handy fixed values)
   // const quickAmounts = useMemo(() => {
@@ -131,7 +135,7 @@ export const ProcessPaymentModal: React.FC<ProcessPaymentModalProps> = ({
         amountPaid,
         customerId: null,
         notes: "",
-        couponCode: "",
+        couponCode: appliedCoupon?.code ?? "",
       };
 
       const payload = buildPOSCheckoutRequest(cart, ctx);
@@ -185,6 +189,14 @@ export const ProcessPaymentModal: React.FC<ProcessPaymentModalProps> = ({
                   <span>VAT (7.5%)</span>
                   <span>{formatMoney(pricing.taxTotal)}</span>
                 </div>
+                {pricing.discountTotal > 0 && (
+                  <div className="mt-1 flex justify-between text-sm text-kk-err">
+                    <span>
+                      {appliedCoupon?.code ? `Coupon (${appliedCoupon.code})` : "Discount"}
+                    </span>
+                    <span>-{formatMoney(pricing.discountTotal)}</span>
+                  </div>
+                )}
                 <div className="mt-3 border-t pt-2 text-lg font-semibold text-kk-pri-text">
                   <div className="flex justify-between">
                     <span>Total Amount</span>

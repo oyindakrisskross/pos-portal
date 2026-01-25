@@ -55,7 +55,15 @@ export interface PriceCartPreviewPayload {
   location: number;
   invoice_discount_type: InvoiceDiscountType;
   invoice_discount_value: string;
+  coupon_code?: string;
   items: PriceCartItemInput[];
+}
+
+export interface AppliedCoupon {
+  code: string;
+  type: string;          // "AMOUNT" | "PERCENT" | "LINE"
+  value: string;
+  amount_applied: string;
 }
 
 // A child line embedded under a parent in "children"
@@ -67,6 +75,7 @@ export interface InvoiceItemChild {
   customization_label: string; // "Crash Course", "No Sugar", or "" if none
   quantity: string;            // decimal as string, e.g. "5.00"
   unit_price: string;          // decimal as string
+  discount_amount: string;
   line_total: string;          // decimal as string
 }
 
@@ -99,6 +108,7 @@ export interface InvoiceResponse {
   number: string;                    // "INV-9-000001"
   type_id: "SALE" | "REFUND";        // currently "SALE" in your examples
   status: "PAID" | "DRAFT" | "VOID" | string;
+  coupon_code?: string;
   location: number;
   location_name: string;
   customer: number | null;

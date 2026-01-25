@@ -23,6 +23,19 @@ export interface BuildCheckoutContext {
   couponCode?: string;
 }
 
+function resolveCustomizationUnitPrice(def: ItemCustomization): string {
+  const delta = parseFloat(def.price_delta || "0") || 0;
+  if (!delta) return "0";
+
+  if (def.pricing_type === "DISCOUNT") {
+    return (-Math.abs(delta)).toString();
+  }
+  if (def.pricing_type === "INCLUDED") {
+    return "0";
+  }
+  return delta.toString();
+}
+
 /**
  * Looks up the full ItemCustomization record for a given selection on a CartLine.
  */
@@ -65,7 +78,7 @@ export function buildInvoiceItemsFromCart(cart: CartLine[]): InvoiceItemInput[] 
         item: def.child,
         quantity: String(totalQty),
         // price_delta is the extra (or discount) per 1 unit
-        unit_price: def.price_delta,
+        unit_price: resolveCustomizationUnitPrice(def),
         discount_amount: "0.00",
         tax_amount: "0.00",
         customization_label: def.label,
@@ -83,15 +96,10 @@ export function buildInvoiceItemsFromCart(cart: CartLine[]): InvoiceItemInput[] 
 }
 
 /**
- * Flatten parents + customizations into a simple list for the /sales/price-cart/
- * preview endpoint. This mirrors the serializer's `flat_lines` structure.
+ * Build the flat list of {item, quantity, unit_price} expected by /sales/price-cart/.
+ * Mirrors the pricing logic used in the POS cart (including INCLUDED / DISCOUNT add-ons).
  */
-export function buildPriceCartPreviewPayload(
-  cart: CartLine[],
-  locationId: number,
-  invoiceDiscountType: InvoiceDiscountType = "AMOUNT",
-  invoiceDiscountValue = "0.00"
-): PriceCartPreviewPayload {
+export function buildPriceCartItemsFromCart(cart: CartLine[]): PriceCartItemInput[] {
   const items: PriceCartItemInput[] = [];
 
   for (const line of cart) {
@@ -104,28 +112,49 @@ export function buildPriceCartPreviewPayload(
       tax_amount: "0.00",
     });
 
-    // customization lines (each acts like its own item with price_delta)
+    // customization lines
     for (const sel of line.customizations || []) {
       const def = resolveCustomization(line, sel.customizationId);
       if (!def) continue;
 
-      const perParentQty = sel.quantity;
-      const totalQty = Number(line.quantity) * perParentQty;
+      const effectiveQty = Number(line.quantity) * sel.quantity;
+      if (effectiveQty <= 0) continue;
+
+      const unit_price = resolveCustomizationUnitPrice(def);
+      // only include if customization has a configured delta (even if INCLUDED -> 0)
+      if ((parseFloat(def.price_delta || "0") || 0) === 0) continue;
 
       items.push({
         item: def.child,
-        quantity: String(totalQty),
-        unit_price: def.price_delta,
+        quantity: String(effectiveQty),
+        unit_price,
         discount_amount: "0.00",
         tax_amount: "0.00",
       });
     }
   }
 
+  return items;
+}
+
+/**
+ * Flatten parents + customizations into a simple list for the /sales/price-cart/
+ * preview endpoint. This mirrors the serializer's `flat_lines` structure.
+ */
+export function buildPriceCartPreviewPayload(
+  cart: CartLine[],
+  locationId: number,
+  invoiceDiscountType: InvoiceDiscountType = "AMOUNT",
+  invoiceDiscountValue = "0.00",
+  couponCode = ""
+): PriceCartPreviewPayload {
+  const items = buildPriceCartItemsFromCart(cart);
+
   return {
     location: locationId,
     invoice_discount_type: invoiceDiscountType,
     invoice_discount_value: invoiceDiscountValue,
+    coupon_code: couponCode,
     items,
   };
 }

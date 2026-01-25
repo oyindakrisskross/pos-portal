@@ -5,38 +5,53 @@ import type { CartLine, CartPricingSummary } from "../types/catalog";
 import { computeLineTotals, formatMoney } from "../helpers/posHelpers";
 import { ProcessPaymentModal } from "./ProcessPaymentModal";
 import { ReceiptModal } from "./ReceiptModal";
-import type { InvoiceResponse } from "../types/invoice";
+import type { AppliedCoupon, InvoiceResponse } from "../types/invoice";
 import { CreditCard, ShoppingCart, StretchVertical, Trash2 } from "lucide-react";
+import { ScanCodeModal } from "./ScanCodeModal";
 
 
 interface CartPaneProps {
   lines: CartLine[];
+  promoLines?: CartLine[];
   pricing: CartPricingSummary | null;
+  appliedCoupon?: AppliedCoupon | null;
+  manualCouponCode?: string;
+  lineDiscounts?: Record<string, number>;
   onChangeQty: (lineId: string, delta: number) => void;
   onRemoveLine: (lineId: string) => void;
   onClearCart: () => void;
-  // We’ll keep "Apply Discount" simple for now – can expand later
-  onApplyDiscount?: () => void;
+  // Keep "Apply Discount" simple for now - can expand later
+  onApplyDiscountCode: (raw: string) => Promise<{ ok: boolean; error?: string }>;
+  onRemoveDiscount: () => void;
   onHoldOrder?: () => void;
   locationId: number;
 }
 
 export const CartPane: React.FC<CartPaneProps> = ({
   lines,
+  promoLines,
   pricing,
+  appliedCoupon,
+  manualCouponCode,
+  lineDiscounts,
   onChangeQty,
   onRemoveLine,
   onClearCart,
+  onRemoveDiscount,
   onHoldOrder,
   locationId,
+  onApplyDiscountCode,
 }) => {
   const [showProcessPayment, setShowProcessPayment] = useState(false);
   const [receiptInvoice, setReceiptInvoice] = useState<InvoiceResponse | null>(null);
+  const [showApplyDiscount, setShowApplyDiscount] = useState(false);
 
   const subtotal = pricing?.subtotal ?? 0;
   const taxTotal = pricing?.taxTotal ?? 0;
-  // const discountTotal = pricing?.discountTotal ?? 0;
+  const discountTotal = pricing?.discountTotal ?? 0;
   const grandTotal = pricing?.grandTotal ?? 0;
+
+  const displayLines = [...lines, ...(promoLines ?? [])];
 
   const handlePaymentCompleted = (invoice: InvoiceResponse) => {
     setShowProcessPayment(false);
@@ -45,17 +60,19 @@ export const CartPane: React.FC<CartPaneProps> = ({
   };
 
   return (
-    <div className="flex h-full flex-col">
+    <div className="flex h-full min-h-0 flex-col">
       {/* Lines */}
-      <div className="flex-1 space-y-2 overflow-auto py-3">
-        {lines.length === 0 ? (
+      <div className="flex-1 min-h-0 space-y-2 overflow-auto py-3">
+        {displayLines.length === 0 ? (
           <div className="flex flex-col gap-2 items-center rounded border border-dashed border-kk-border-strong bg-kk-pri-bg p-4 text-center text-xs text-kk-ter-text">
             <ShoppingCart className="w-7 h-7" />
             Cart is empty. Tap an item to add it.
           </div>
         ) : (
-          lines.map((line) => {
+          displayLines.map((line) => {
             const { unitPrice, lineTotal } = computeLineTotals(line);
+            const lineDiscount = lineDiscounts?.[line.id] ?? 0;
+            const isPromo = Boolean(line.promo);
 
             return (
               <div
@@ -66,6 +83,11 @@ export const CartPane: React.FC<CartPaneProps> = ({
                   <div className="flex-1">
                     <div className="text-sm font-semibold text-kk-pri-text">
                       {line.item.name}
+                      {isPromo && (
+                        <span className="ml-2 inline-flex rounded-full bg-purple-100 px-2 py-0.5 text-[10px] font-semibold text-purple-700">
+                          Promo
+                        </span>
+                      )}
                     </div>
                     {line.item.sku && (
                       <div className="text-[11px] text-kk-sec-text">
@@ -83,7 +105,7 @@ export const CartPane: React.FC<CartPaneProps> = ({
                           if (!meta || sel.quantity <= 0) return null;
                           return (
                             <li key={sel.customizationId}>
-                              {meta.label} × {sel.quantity}
+                              {meta.label} x {sel.quantity}
                             </li>
                           );
                         })}
@@ -92,16 +114,24 @@ export const CartPane: React.FC<CartPaneProps> = ({
                   </div>
 
                   <div className="text-right text-sm font-semibold text-kk-pri-text">
-                    {formatMoney(lineTotal)}
+                    {formatMoney(lineTotal - lineDiscount)}
                   </div>
                 </div>
+
+                {lineDiscount > 0 && (
+                  <div className="flex justify-between text-[11px] text-kk-err">
+                    <span>Discount applied</span>
+                    <span>-{formatMoney(lineDiscount)}</span>
+                  </div>
+                )}
 
                 <div className="mt-1 flex items-center justify-between text-xs text-kk-sec-text">
                   <span>{formatMoney(unitPrice)} each</span>
                   <div className="flex items-center gap-2">
                     <button
                       type="button"
-                      className="flex h-6 w-6 items-center justify-center rounded-full border border-kk-border-strong text-xs cursor-pointer"
+                      disabled={isPromo}
+                      className="flex h-6 w-6 items-center justify-center rounded-full border border-kk-border-strong text-xs cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
                       onClick={() => onChangeQty(line.id, -1)}
                     >
                       −
@@ -111,14 +141,16 @@ export const CartPane: React.FC<CartPaneProps> = ({
                     </span>
                     <button
                       type="button"
-                      className="flex h-6 w-6 items-center justify-center rounded-full border border-kk-border-strong text-xs cursor-pointer"
+                      disabled={isPromo}
+                      className="flex h-6 w-6 items-center justify-center rounded-full border border-kk-border-strong text-xs cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
                       onClick={() => onChangeQty(line.id, +1)}
                     >
                       +
                     </button>
                     <button
                       type="button"
-                      className="ml-2 text-xs text-kk-err cursor-pointer"
+                      disabled={isPromo}
+                      className="ml-2 text-xs text-kk-err cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
                       onClick={() => onRemoveLine(line.id)}
                     >
                       <Trash2 className="w-4 h-4" />
@@ -132,22 +164,35 @@ export const CartPane: React.FC<CartPaneProps> = ({
       </div>
 
       {/* Summary / actions */}
-      <div className="space-y-3 border-t border-kk-border-strong pt-3 h-2/5">
+      <div className="shrink-0 space-y-3 border-t border-kk-border-strong pt-3">
         {/* TODO: check permission "Coupons" "edit" for manual coupon input */}
-        {/* <button
-          disabled
-          type="button"
-          className="flex w-full items-center justify-center gap-2 rounded-lg border bg-kk-pri-bg py-2 text-[11px] font-medium text-gray-800"
-          onClick={onApplyDiscount}
-        >
-          <span>%</span>
-          <span>Apply Discount</span>
-        </button> */}
+        <div className="flex gap-2">
+          <button
+            type="button"
+            className="flex flex-1 items-center justify-center gap-2 rounded-lg border bg-kk-pri-bg py-2 text-[11px] font-medium text-gray-800 disabled:cursor-not-allowed disabled:opacity-60"
+            disabled={displayLines.length === 0}
+            onClick={() => setShowApplyDiscount(true)}
+          >
+            <span>%</span>
+            <span>Apply Discount</span>
+          </button>
+
+          <button
+            type="button"
+            className="flex flex-1 items-center justify-center gap-2 rounded-lg border bg-kk-pri-bg py-2 text-[11px] font-medium text-kk-err disabled:cursor-not-allowed disabled:opacity-60"
+            disabled={displayLines.length === 0 || !manualCouponCode}
+            onClick={onRemoveDiscount}
+            title={manualCouponCode ? "Remove scanned coupon" : "No scanned coupon to remove"}
+          >
+            <span>x</span>
+            <span>Remove Discount</span>
+          </button>
+        </div>
 
         <div className="space-y-1 text-sm text-kk-sec-text">
           <div className="flex justify-between">
             <span>
-              Subtotal ({lines.length} item{lines.length === 1 ? "" : "s"})
+              Subtotal ({displayLines.length} item{displayLines.length === 1 ? "" : "s"})
             </span>
             <span>{formatMoney(subtotal)}</span>
           </div>
@@ -155,13 +200,14 @@ export const CartPane: React.FC<CartPaneProps> = ({
             <span>VAT (7.5%)</span>
             <span>{formatMoney(taxTotal)}</span>
           </div>
-          {/* TODO: Discount Logic, Phase 2 */}
-          {/* {discountTotal > 0 && (
+          {discountTotal > 0 && (
             <div className="flex justify-between text-kk-err">
-              <span>Discount</span>
+              <span>
+                {appliedCoupon?.code ? `Coupon (${appliedCoupon.code})` : "Discount"}
+              </span>
               <span>-{formatMoney(discountTotal)}</span>
             </div>
-          )} */}
+          )}
         </div>
 
         <div className="flex items-center justify-between text-lg font-semibold text-kk-pri-text">
@@ -175,7 +221,7 @@ export const CartPane: React.FC<CartPaneProps> = ({
                       font-semibold hover:bg-kk-hover cursor-pointer disabled:cursor-not-allowed 
                       disabled:hover:bg-kk-acc flex justify-center items-center gap-3
                        transition-all duration-300"
-          disabled={lines.length === 0}
+          disabled={displayLines.length === 0}
           onClick={() => setShowProcessPayment(true)}
         >
           <CreditCard className="w-6 h-6" />
@@ -210,6 +256,7 @@ export const CartPane: React.FC<CartPaneProps> = ({
         isOpen={showProcessPayment}
         locationId={locationId}
         cart={lines}
+        appliedCoupon={appliedCoupon ?? null}
         onClose={() => setShowProcessPayment(false)}
         onPaymentCompleted={handlePaymentCompleted}
       />
@@ -219,6 +266,14 @@ export const CartPane: React.FC<CartPaneProps> = ({
         invoice={receiptInvoice}
         onClose={() => setReceiptInvoice(null)}
         onPrint={() => window.print()}
+      />
+
+      <ScanCodeModal
+        isOpen={showApplyDiscount}
+        title="Apply Discount"
+        subtitle="Please scan discount QR code"
+        onClose={() => setShowApplyDiscount(false)}
+        onCode={onApplyDiscountCode}
       />
     </div>
   );

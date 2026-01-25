@@ -3,7 +3,6 @@
 import React from "react";
 import { formatMoney } from "../helpers/posHelpers";
 import type { InvoiceResponse } from "../types/invoice";
-import QRCode from "react-qr-code";
 
 interface ReceiptModalProps {
   isOpen: boolean;
@@ -81,6 +80,12 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({
               <div className="ml-4 text-xs text-kk-pri-text">
                 {ln.quantity} × {formatMoney(ln.unit_price)}
               </div>
+              {parseFloat(ln.discount_amount ?? "0") > 0 && (
+                <div className="ml-4 flex justify-between text-xs text-kk-err">
+                  <span>Discount</span>
+                  <span>-{formatMoney(ln.discount_amount)}</span>
+                </div>
+              )}
               {ln.children &&
                 ln.children.map((child: any) => (
                   <div
@@ -96,6 +101,18 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({
                     <span>{formatMoney(child.line_total)}</span>
                   </div>
                 ))}
+              {ln.children &&
+                ln.children.map((child: any) =>
+                  parseFloat(child.discount_amount ?? "0") > 0 ? (
+                    <div
+                      key={`disc-${child.id}`}
+                      className="ml-6 flex justify-between text-[10px] text-kk-err"
+                    >
+                      <span>Discount</span>
+                      <span>-{formatMoney(child.discount_amount)}</span>
+                    </div>
+                  ) : null
+                )}
             </div>
           ))}
 
@@ -111,6 +128,19 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({
               <span>VAT (7.5%):</span>
               <span>{formatMoney(invoice.tax_total)}</span>
             </div>
+            {parseFloat(invoice.discount_total ?? "0") > 0 && (
+              <>
+                <div className="flex justify-between text-kk-err">
+                  <span>Discount:</span>
+                  <span>-{formatMoney(invoice.discount_total)}</span>
+                </div>
+                {invoice.coupon_code && (
+                  <div className="text-[10px] text-kk-sec-text">
+                    Code: {invoice.coupon_code}
+                  </div>
+                )}
+              </>
+            )}
             <div className="mt-2 flex justify-between text-base font-semibold">
               <span>TOTAL:</span>
               <span>{formatMoney(invoice.grand_total)}</span>
@@ -173,6 +203,7 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({
             className="flex-1 rounded-lg bg-kk-acc px-4 py-2 text-sm font-semibold 
                       text-kk-pri-bg hover:bg-kk-hover transition-all duration-300 cursor-pointer"
             onClick={() => {
+              if (onPrint) return onPrint();
               window.print();
             }}
           >
