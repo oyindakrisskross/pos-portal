@@ -39,6 +39,9 @@ export const PosItemCustomizeModal: React.FC<PosItemCustomizeModalProps> = ({
   if (!isOpen || !item) return null;
 
   const basePrice = parseDecimal(item.price, 0);
+  const stockQty = item.inventory_tracking ? parseDecimal(item.stock_qty, 0) : null;
+  const outOfStock = stockQty !== null && stockQty <= 0;
+  const maxQty = stockQty !== null ? Math.max(0, Math.floor(stockQty)) : Infinity;
 
   const addOns: ItemCustomization[] =
     item.customizations?.filter((c) => c.pricing_type === PRICING_EXTRA) ?? [];
@@ -79,10 +82,18 @@ export const PosItemCustomizeModal: React.FC<PosItemCustomizeModalProps> = ({
   const lineSubtotal = (basePrice + totalDeltaPerUnit) * quantity;
 
   const handleChangeQuantity = (delta: number) => {
-    setQuantity((prev) => Math.max(1, prev + delta));
+    setQuantity((prev) => {
+      const next = Math.max(1, prev + delta);
+      if (Number.isFinite(maxQty)) {
+        if (maxQty <= 0) return 1;
+        return Math.min(next, maxQty);
+      }
+      return next;
+    });
   };
 
   const handleAdd = () => {
+    if (outOfStock) return;
     const selectedCustomizations: CustomizationSelection[] = [];
 
     if (item.customizations?.length) {
@@ -203,7 +214,7 @@ export const PosItemCustomizeModal: React.FC<PosItemCustomizeModalProps> = ({
                       </div>
                       {delta !== 0 && (
                         <span className="text-sm font-semibold text-kk-err">
-                          −₦{formatMoney(delta)}
+                          −{formatMoney(delta)}
                         </span>
                       )}
                     </label>
@@ -240,6 +251,11 @@ export const PosItemCustomizeModal: React.FC<PosItemCustomizeModalProps> = ({
                   +
                 </button>
               </div>
+              {outOfStock && (
+                <div className="mt-2 text-xs font-semibold text-kk-err">
+                  Out of stock
+                </div>
+              )}
             </div>
 
             <div className="text-right">
@@ -266,8 +282,10 @@ export const PosItemCustomizeModal: React.FC<PosItemCustomizeModalProps> = ({
           </button>
           <button
             type="button"
-            className="flex-1 rounded-md bg-kk-acc px-4 py-2 text-sm font-semibold 
-              hover:bg-kk-hover cursor-pointer text-kk-pri-bg"
+            disabled={outOfStock}
+            className={`flex-1 rounded-md px-4 py-2 text-sm font-semibold text-kk-pri-bg ${
+              outOfStock ? "cursor-not-allowed bg-kk-ter-bg" : "bg-kk-acc hover:bg-kk-hover cursor-pointer"
+            }`}
             onClick={handleAdd}
           >
             Add to Cart

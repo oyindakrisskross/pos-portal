@@ -59,7 +59,15 @@ export const PosItemGroupModal: React.FC<PosItemGroupModalProps> = ({
     groupAttributes.length === 0 ||
     groupAttributes.every((attr) => selectedOptions[attr.id] != null);
 
-  const canAddToCart = !!effectiveItem && allAttributesSelected;
+  const stockQty =
+    effectiveItem && effectiveItem.inventory_tracking
+      ? parseDecimal(effectiveItem.stock_qty, 0)
+      : null;
+  const outOfStock = stockQty !== null && stockQty <= 0;
+  const maxQty = stockQty !== null ? Math.max(0, Math.floor(stockQty)) : Infinity;
+
+  const canAddToCart =
+    !!effectiveItem && allAttributesSelected && !outOfStock && quantity <= maxQty;
 
   const handleAttributeChange = (attributeId: number, optionId: number) => {
     setSelectedOptions((prev) => ({
@@ -69,7 +77,14 @@ export const PosItemGroupModal: React.FC<PosItemGroupModalProps> = ({
   };
 
   const handleChangeQuantity = (delta: number) => {
-    setQuantity((prev) => Math.max(1, prev + delta));
+    setQuantity((prev) => {
+      const next = Math.max(1, prev + delta);
+      if (Number.isFinite(maxQty)) {
+        if (maxQty <= 0) return 1;
+        return Math.min(next, maxQty);
+      }
+      return next;
+    });
   };
 
   const handleCustomizationQtyChange = (
@@ -105,6 +120,7 @@ export const PosItemGroupModal: React.FC<PosItemGroupModalProps> = ({
 
   const handleAdd = () => {
     if (!effectiveItem) return;
+    if (outOfStock) return;
 
     const selectedCustomizations: CustomizationSelection[] = [];
     if (hasCustomizations && effectiveItem.customizations) {
@@ -293,6 +309,11 @@ export const PosItemGroupModal: React.FC<PosItemGroupModalProps> = ({
                   +
                 </button>
               </div>
+              {outOfStock && (
+                <div className="mt-2 text-xs font-semibold text-kk-err">
+                  Out of stock
+                </div>
+              )}
             </div>
 
             <div className="text-right">

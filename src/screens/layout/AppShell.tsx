@@ -1,6 +1,6 @@
 // src/screens/layout/AppShell.tsx
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { PosScreen } from "../PosScreen";
 import type { 
   AddToCartPayload, 
@@ -17,6 +17,8 @@ import { Ellipsis, LogOut, ReceiptText, Store, StretchVertical } from "lucide-re
 import { SidebarItem } from "../../components/SideBarItem";
 import { useAuth } from "../../auth/AuthContext";
 import type { AppliedCoupon } from "../../types/invoice";
+import { parseDecimal } from "../../helpers/posHelpers";
+import { fetchOutlets } from "../../api/auth";
 
 
 function makeLineId(counter: number) {
@@ -45,17 +47,60 @@ export const PosApp: React.FC<Props> = ({
   const [heldOpen, setHeldOpen] = useState(false);
   const [activeView, setActiveView] = useState<ViewKey>("POS");
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [toast, setToast] = useState<string | null>(null);
+  const toastTimerRef = useRef<number | null>(null);
+  const [locationName, setLocationName] = useState<string>("");
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const load = async () => {
+      if (!locationId) {
+        setLocationName("");
+        return;
+      }
+
+      const outlets = await fetchOutlets();
+      if (cancelled) return;
+      const match = outlets.find((o) => o.id === locationId);
+      setLocationName(match?.name ?? `Location #${locationId}`);
+    };
+
+    load();
+    return () => {
+      cancelled = true;
+    };
+  }, [locationId]);
+
+  const showToast = (message: string) => {
+    setToast(message);
+    if (toastTimerRef.current) {
+      window.clearTimeout(toastTimerRef.current);
+    }
+    toastTimerRef.current = window.setTimeout(() => setToast(null), 3500);
+  };
+
+  useEffect(() => {
+    return () => {
+      if (toastTimerRef.current) {
+        window.clearTimeout(toastTimerRef.current);
+      }
+    };
+  }, []);
 
   const buildPriceCartPayload = (cartLines: CartLine[]) => {
     const itemsPayload: any[] = [];
     const payloadToCartLine: string[] = [];
 
-    for (const line of cartLines) {
+    for (let parentIdx = 0; parentIdx < cartLines.length; parentIdx++) {
+      const line = cartLines[parentIdx];
       const parent = line.item;
       itemsPayload.push({
         item: parent.id,
         quantity: line.quantity,
         unit_price: parent.price,
+        parent_idx: parentIdx,
+        is_child: false,
       });
       payloadToCartLine.push(line.id);
 
@@ -82,6 +127,8 @@ export const PosApp: React.FC<Props> = ({
             item: meta.child,
             quantity: effectiveQty,
             unit_price: unitPrice.toString(),
+            parent_idx: parentIdx,
+            is_child: true,
           });
           payloadToCartLine.push(line.id);
         }
@@ -112,7 +159,7 @@ export const PosApp: React.FC<Props> = ({
       const cartLineId = payloadToCartLine[idx];
       if (!cartLineId) return;
       const disc = parseFloat(ln?.total_discount_amount ?? "0") || 0;
-      if (!disc) return;
+      if (disc <= 0) return;
       nextDiscounts[cartLineId] = (nextDiscounts[cartLineId] ?? 0) + disc;
     });
 
@@ -163,6 +210,26 @@ export const PosApp: React.FC<Props> = ({
 
   const handleAddToCart = (payload: AddToCartPayload) => {
     setCart((prev) => {
+      if (payload.item.inventory_tracking) {
+        const stockQty = parseDecimal(payload.item.stock_qty, 0);
+        if (stockQty <= 0) {
+          showToast(`"${payload.item.name}" is out of stock.`);
+          return prev;
+        }
+
+        const alreadyInCart = prev.reduce(
+          (acc, line) => (line.item.id === payload.item.id ? acc + line.quantity : acc),
+          0
+        );
+        const nextTotal = alreadyInCart + payload.quantity;
+        if (nextTotal > stockQty) {
+          showToast(
+            `Only ${stockQty} in stock for "${payload.item.name}". You already have ${alreadyInCart} in the cart.`
+          );
+          return prev;
+        }
+      }
+
       const existingIndex = prev.findIndex(
         (line) =>
           line.item.id === payload.item.id &&
@@ -186,7 +253,7 @@ export const PosApp: React.FC<Props> = ({
 
       return prev.map((line, idx) =>
         idx === existingIndex
-          ? { ...line, quantity: line.quantity + 1 }
+          ? { ...line, quantity: line.quantity + payload.quantity }
           : line
       );
     });
@@ -233,14 +300,34 @@ export const PosApp: React.FC<Props> = ({
   const handleChangeQty = (lineId: string, delta: number) => {
     setCart((prev) =>
       prev
-        .map((line) => 
-          line.id === lineId
-            ? {
-                ...line,
-                quantity: Math.max(0, line.quantity + delta),
-              }
-            : line
-        )
+        .map((line) => {
+          if (line.id !== lineId) return line;
+          if (delta <= 0) {
+            return { ...line, quantity: Math.max(0, line.quantity + delta) };
+          }
+
+          if (line.item.inventory_tracking) {
+            const stockQty = parseDecimal(line.item.stock_qty, 0);
+            if (stockQty <= 0) {
+              showToast(`"${line.item.name}" is out of stock.`);
+              return line;
+            }
+
+            const alreadyInCart = prev.reduce(
+              (acc, l) => (l.item.id === line.item.id ? acc + l.quantity : acc),
+              0
+            );
+            const nextTotal = alreadyInCart + delta;
+            if (nextTotal > stockQty) {
+              showToast(
+                `Only ${stockQty} in stock for "${line.item.name}". You already have ${alreadyInCart} in the cart.`
+              );
+              return line;
+            }
+          }
+
+          return { ...line, quantity: Math.max(0, line.quantity + delta) };
+        })
         .filter((line) => line.quantity > 0)
     );
   };
@@ -530,7 +617,9 @@ export const PosApp: React.FC<Props> = ({
 
               <div className="w-1/3 h-full min-h-0 overflow-hidden border-l border-kk-border bg-kk-sec-bg p-4 flex flex-col">
                 <div className="mb-2 flex items-center justify-between shrink-0">
-                  <h2 className="text-sm font-semibold"></h2>
+                  <h2 className="text-sm font-semibold text-kk-pri-text truncate" title={locationName}>
+                    {locationName}
+                  </h2>
                   <div className="text-right text-xs text-kk-sec-text">
                     <div className="font-semibold">{timeLabel}</div>
                     <div>{dateLabel}</div>
@@ -574,6 +663,12 @@ export const PosApp: React.FC<Props> = ({
         loadHeldOrder={getHeldOrder}
         onReplaceCart={handleReplaceCart}
       />
+
+      {toast && (
+        <div className="fixed bottom-6 right-6 z-[60] max-w-sm rounded-lg border border-kk-border-strong bg-kk-pri-bg px-4 py-3 text-xs font-semibold text-kk-pri-text shadow-xl">
+          {toast}
+        </div>
+      )}
     </div>
   );
 };

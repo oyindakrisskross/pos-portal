@@ -16,8 +16,10 @@ export const SimplePosItemCard: React.FC<SimplePosItemCardProps> = ({
 }) => {
   const stockQty = parseDecimal(item.stock_qty, 0);
   const price = parseDecimal(item.price, 0);
+  const isOutOfStock = item.inventory_tracking && stockQty <= 0;
 
   const handleClick = () => {
+    if (isOutOfStock) return;
     if (onClickItem) {
       onClickItem(item);
       return;
@@ -33,8 +35,11 @@ export const SimplePosItemCard: React.FC<SimplePosItemCardProps> = ({
   return (
     <button
       type="button"
-      className="flex flex-col rounded-lg border border-kk-border bg-kk-pri-bg 
-                  p-3 text-left shadow-sm hover:shadow-md transition"
+      disabled={isOutOfStock}
+      title={isOutOfStock ? "Out of stock" : undefined}
+      className={`flex flex-col rounded-lg border border-kk-border bg-kk-pri-bg p-3 text-left shadow-sm transition ${
+        isOutOfStock ? "cursor-not-allowed opacity-60" : "hover:shadow-md"
+      }`}
       onClick={handleClick}
     >
       {/* Image placeholder */}
