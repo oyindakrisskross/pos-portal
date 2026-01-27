@@ -47,6 +47,10 @@ export interface PriceCartItemInput {
   unit_price?: string;   // override if needed, otherwise use catalog price
   discount_amount?: string;
   tax_amount?: string;
+  // Optional: allow the backend to understand parent/customization groupings,
+  // so coupon logic can decide how to treat customized items.
+  parent_idx?: number;
+  is_child?: boolean;
 }
 
 export type InvoiceDiscountType = "AMOUNT" | "PERCENT";

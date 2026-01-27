@@ -102,7 +102,8 @@ export function buildInvoiceItemsFromCart(cart: CartLine[]): InvoiceItemInput[] 
 export function buildPriceCartItemsFromCart(cart: CartLine[]): PriceCartItemInput[] {
   const items: PriceCartItemInput[] = [];
 
-  for (const line of cart) {
+  for (let parentIdx = 0; parentIdx < cart.length; parentIdx++) {
+    const line = cart[parentIdx];
     // parent line
     items.push({
       item: line.item.id,
@@ -110,6 +111,8 @@ export function buildPriceCartItemsFromCart(cart: CartLine[]): PriceCartItemInpu
       unit_price: line.item.price,
       discount_amount: "0.00",
       tax_amount: "0.00",
+      parent_idx: parentIdx,
+      is_child: false,
     });
 
     // customization lines
@@ -130,6 +133,8 @@ export function buildPriceCartItemsFromCart(cart: CartLine[]): PriceCartItemInpu
         unit_price,
         discount_amount: "0.00",
         tax_amount: "0.00",
+        parent_idx: parentIdx,
+        is_child: true,
       });
     }
   }

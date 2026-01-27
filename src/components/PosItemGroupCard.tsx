@@ -24,13 +24,17 @@ export const PosItemGroupCard: React.FC<PosItemGroupCardProps> = ({
     (acc, item) => acc + parseDecimal(item.stock_qty, 0),
     0
   );
+  const isOutOfStock = inventoryTracking && stockQty <= 0;
 
   return (
     <button
       type="button"
-      className="flex flex-col rounded-lg border border-kk-border bg-kk-pri-bg 
-                p-3 text-left shadow-sm hover:shadow-md transition cursor-pointer"
-      onClick={onOpen}
+      disabled={isOutOfStock}
+      title={isOutOfStock ? "All variants are out of stock" : undefined}
+      className={`flex flex-col rounded-lg border border-kk-border bg-kk-pri-bg p-3 text-left shadow-sm transition ${
+        isOutOfStock ? "cursor-not-allowed opacity-60" : "cursor-pointer hover:shadow-md"
+      }`}
+      onClick={isOutOfStock ? undefined : onOpen}
     >
       {/* Image placeholder */}
       <div className="mb-2 flex h-28 w-full items-center justify-center rounded-lg bg-kk-sec-bg text-[11px] text-kk-ter-text">

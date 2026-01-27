@@ -14,7 +14,7 @@ export interface Me {
   email: string;
   username: string;
   portal: number;
-  role: { id: number; name: string };
+  role: { id: number; name: string } | null;
   permissions: Record<string, PermissionBitSet>;
   contact_first_name: string;
 };

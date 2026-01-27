@@ -54,6 +54,17 @@ export const ProcessPaymentModal: React.FC<ProcessPaymentModalProps> = ({
 
   const cartIsEmpty = cart.length === 0;
 
+  const apiErrorMessage = (err: any, fallback: string) => {
+    const data = err?.response?.data;
+    if (typeof data === "string" && data.trim()) return data;
+    if (data?.detail) return String(data.detail);
+    if (data?.message) return String(data.message);
+    if (Array.isArray(data?.non_field_errors) && data.non_field_errors[0]) {
+      return String(data.non_field_errors[0]);
+    }
+    return err?.message || fallback;
+  };
+
   // Whenever modal opens or cart changes, fetch a fresh preview
   useEffect(() => {
     if (!isOpen || cartIsEmpty) {
@@ -84,7 +95,7 @@ export const ProcessPaymentModal: React.FC<ProcessPaymentModalProps> = ({
         // default quick amount: grand total
         setAmountPaid(summary.grandTotal.toString());
       } catch (err: any) {
-        setPricingError(err.message || "Unable to price cart.");
+        setPricingError(apiErrorMessage(err, "Unable to price cart."));
       } finally {
         setPricingLoading(false);
       }
@@ -143,7 +154,7 @@ export const ProcessPaymentModal: React.FC<ProcessPaymentModalProps> = ({
       const invoice: InvoiceResponse = await checkOut(payload);
       onPaymentCompleted(invoice);
     } catch (err: any) {
-      setSubmitError(err.message || "Unable to complete payment.");
+      setSubmitError(apiErrorMessage(err, "Unable to complete payment."));
     } finally {
       setSubmitting(false);
     }
