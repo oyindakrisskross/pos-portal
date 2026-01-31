@@ -1,6 +1,6 @@
 // src/screens/layout/AppShell.tsx
 
-import React, { useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { PosScreen } from "../PosScreen";
 import type { 
   AddToCartPayload, 
@@ -9,8 +9,17 @@ import type {
   HeldOrderSummary, 
 } from "../../types/catalog";
 import { CartPane } from "../../components/CartPane";
-import { createHoldCart, fetchHeldOrders, fetchPriceCart, loadHeldOrder } from "../../api/cart";
+import {
+  cancelHeldOrder,
+  completeHeldOrder,
+  createHoldCart,
+  fetchHeldOrders,
+  fetchPriceCart,
+  loadHeldOrder,
+  updateHoldCart,
+} from "../../api/cart";
 import { HeldOrdersModal } from "../../components/HeldOrdersModal";
+import { HoldOrderNameModal } from "../../components/HoldOrderNameModal";
 import { fetchPOSItem } from "../../api/catalog";
 import { OrdersScreen } from "../OrdersScreen";
 import { Ellipsis, LogOut, ReceiptText, Store, StretchVertical } from "lucide-react";
@@ -45,6 +54,9 @@ export const PosApp: React.FC<Props> = ({
   const [manualCouponCode, setManualCouponCode] = useState<string>("");
   const [lineDiscounts, setLineDiscounts] = useState<Record<string, number>>({});
   const [heldOpen, setHeldOpen] = useState(false);
+  const [activeHeldOrder, setActiveHeldOrder] = useState<{ id: number; customer_name: string } | null>(null);
+  const [holdNameOpen, setHoldNameOpen] = useState(false);
+  const [holding, setHolding] = useState(false);
   const [activeView, setActiveView] = useState<ViewKey>("POS");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
@@ -266,36 +278,50 @@ export const PosApp: React.FC<Props> = ({
     });
   };
 
-  const listHeldOrders = async (locationId: number): Promise<HeldOrderSummary[]> => {
-    return await fetchHeldOrders(locationId);
-  };
+  const listHeldOrders = useCallback(
+    async (locId: number, q?: string): Promise<HeldOrderSummary[]> => {
+      return await fetchHeldOrders(locId, q);
+    },
+    []
+  );
 
-  const getHeldOrder = async (heldOrderId: number): Promise<AddToCartPayload[]> => {
-    const data = await loadHeldOrder(heldOrderId);
+  const getHeldOrder = useCallback(
+    async (heldOrderId: number): Promise<AddToCartPayload[]> => {
+      const data = await loadHeldOrder(heldOrderId);
 
-    const lines = await Promise.all(
-      data.items.map(async (row: any): Promise<AddToCartPayload> => {
-        const item = await fetchPOSItem(row.item, {location_id: locationId});
+      const lines = await Promise.all(
+        data.items.map(async (row: any): Promise<AddToCartPayload> => {
+          const item = await fetchPOSItem(row.item, { location_id: locationId });
 
-        const customizations = 
-          row.customization_id && row.customization_qty
-          ? [
-              {
-                customizationId: Number(row.customization_id),
-                quantity: Number(row.customization_qty),
-              },
-            ]
-          : [];
+          const customizations =
+            row.customization_id && row.customization_qty
+              ? [
+                  {
+                    customizationId: Number(row.customization_id),
+                    quantity: Number(row.customization_qty),
+                  },
+                ]
+              : [];
 
-        return {
-          item,
-          quantity: Number(row.quantity),
-          customizations,
-        };
-      })
-    );
-    return lines;
-  };
+          return {
+            item,
+            quantity: Number(row.quantity),
+            customizations,
+          };
+        })
+      );
+      return lines;
+    },
+    [locationId]
+  );
+
+  const handleResumeHeldOrder = useCallback(
+    (order: HeldOrderSummary) => {
+      setActiveHeldOrder({ id: order.id, customer_name: order.customer_name });
+      showToast(`Resumed held order: ${order.customer_name || `#${order.id}`}`);
+    },
+    []
+  );
 
   const handleChangeQty = (lineId: string, delta: number) => {
     setCart((prev) =>
@@ -342,13 +368,11 @@ export const PosApp: React.FC<Props> = ({
     setManualCouponCode("");
   };
 
-  const handleHoldOrder = async () => {
-    if (cart.length === 0) return;
-
+  const buildHoldItemsPayload = useCallback((cartLines: CartLine[]) => {
     // Build payload EXACTLY like price-cart items
     const itemsPayload: any[] = [];
 
-    for (const line of cart) {
+    for (const line of cartLines) {
       const parent = line.item;
 
       itemsPayload.push({
@@ -379,13 +403,91 @@ export const PosApp: React.FC<Props> = ({
       }
     }
 
-    const held = await createHoldCart({
-      location: locationId,
-      items: itemsPayload,
-    });
-    console.log("Held order saved:", held);
-    handleClearCart();
+    return itemsPayload;
+  }, []);
+
+  const saveNewHeldOrder = async (customerName: string) => {
+    if (cart.length === 0) return;
+    setHolding(true);
+    try {
+      const itemsPayload = buildHoldItemsPayload(cart);
+      await createHoldCart({
+        location: locationId,
+        customer_name: customerName,
+        items: itemsPayload,
+      });
+      showToast(`Held order saved: ${customerName}`);
+      handleClearCart();
+    } catch (err: any) {
+      showToast(err?.response?.data?.detail || "Failed to hold order.");
+    } finally {
+      setHolding(false);
+    }
   };
+
+  const saveExistingHeldOrder = async () => {
+    if (!activeHeldOrder) return;
+    if (cart.length === 0) return;
+
+    setHolding(true);
+    try {
+      const itemsPayload = buildHoldItemsPayload(cart);
+      await updateHoldCart(activeHeldOrder.id, {
+        customer_name: activeHeldOrder.customer_name,
+        items: itemsPayload,
+      });
+      showToast(`Held order updated: ${activeHeldOrder.customer_name}`);
+      setActiveHeldOrder(null);
+      handleClearCart();
+    } catch (err: any) {
+      showToast(err?.response?.data?.detail || "Failed to update held order.");
+    } finally {
+      setHolding(false);
+    }
+  };
+
+  const handleCancelHeldOrder = async () => {
+    if (!activeHeldOrder) {
+      handleClearCart();
+      return;
+    }
+
+    setHolding(true);
+    try {
+      await cancelHeldOrder(activeHeldOrder.id);
+      showToast(`Cancelled held order: ${activeHeldOrder.customer_name}`);
+    } catch (err: any) {
+      showToast(err?.response?.data?.detail || "Failed to cancel held order.");
+    } finally {
+      setActiveHeldOrder(null);
+      handleClearCart();
+      setHolding(false);
+    }
+  };
+
+  const handleHoldOrder = async () => {
+    if (cart.length === 0 || holding) return;
+    if (activeHeldOrder) {
+      await saveExistingHeldOrder();
+      return;
+    }
+    setHoldNameOpen(true);
+  };
+
+  const handleAfterPaymentCompleted = useCallback(() => {
+    const current = activeHeldOrder;
+    if (!current) return;
+
+    (async () => {
+      try {
+        await completeHeldOrder(current.id);
+      } catch (err: any) {
+        showToast(err?.response?.data?.detail || "Failed to complete held order.");
+      } finally {
+        setActiveHeldOrder(null);
+      }
+    })();
+  }, [activeHeldOrder, showToast]);
 
 
   const applyDiscountFromRaw = async (
@@ -637,10 +739,16 @@ export const PosApp: React.FC<Props> = ({
                     onChangeQty={handleChangeQty}
                     onRemoveLine={handleRemoveLine}
                     onClearCart={handleClearCart}
+                    onClearAction={activeHeldOrder ? handleCancelHeldOrder : handleClearCart}
                     onApplyDiscountCode={applyDiscountFromRaw}
                     onRemoveDiscount={handleRemoveDiscount}
                     onHoldOrder={handleHoldOrder}
                     locationId={locationId}
+                    holdOrderLabel={activeHeldOrder ? "Put Back On Hold" : "Hold Order"}
+                    clearCartLabel={activeHeldOrder ? "Cancel Held Order" : "Clear Cart"}
+                    heldOrderName={activeHeldOrder?.customer_name ?? null}
+                    holding={holding}
+                    onAfterPaymentCompleted={handleAfterPaymentCompleted}
                   />
                 </div>
               </div>
@@ -662,10 +770,20 @@ export const PosApp: React.FC<Props> = ({
         fetchHeldOrders={listHeldOrders}
         loadHeldOrder={getHeldOrder}
         onReplaceCart={handleReplaceCart}
+        onResumeHeldOrder={handleResumeHeldOrder}
+      />
+
+      <HoldOrderNameModal
+        isOpen={holdNameOpen}
+        onClose={() => setHoldNameOpen(false)}
+        onConfirm={(name) => {
+          setHoldNameOpen(false);
+          saveNewHeldOrder(name);
+        }}
       />
 
       {toast && (
-        <div className="fixed bottom-6 right-6 z-[60] max-w-sm rounded-lg border border-kk-border-strong bg-kk-pri-bg px-4 py-3 text-xs font-semibold text-kk-pri-text shadow-xl">
+        <div className="fixed top-6 left-1/2 z-[60] w-[min(92vw,24rem)] -translate-x-1/2 rounded-lg border border-kk-border-strong bg-kk-pri-bg px-4 py-3 text-center text-xs font-semibold text-kk-pri-text shadow-xl">
           {toast}
         </div>
       )}

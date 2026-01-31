@@ -20,11 +20,17 @@ interface CartPaneProps {
   onChangeQty: (lineId: string, delta: number) => void;
   onRemoveLine: (lineId: string) => void;
   onClearCart: () => void;
+  onClearAction: () => void;
   // Keep "Apply Discount" simple for now - can expand later
   onApplyDiscountCode: (raw: string) => Promise<{ ok: boolean; error?: string }>;
   onRemoveDiscount: () => void;
   onHoldOrder?: () => void;
   locationId: number;
+  holdOrderLabel?: string;
+  clearCartLabel?: string;
+  heldOrderName?: string | null;
+  holding?: boolean;
+  onAfterPaymentCompleted?: (invoice: InvoiceResponse) => void;
 }
 
 export const CartPane: React.FC<CartPaneProps> = ({
@@ -37,10 +43,16 @@ export const CartPane: React.FC<CartPaneProps> = ({
   onChangeQty,
   onRemoveLine,
   onClearCart,
+  onClearAction,
   onRemoveDiscount,
   onHoldOrder,
   locationId,
   onApplyDiscountCode,
+  holdOrderLabel = "Hold Order",
+  clearCartLabel = "Clear Cart",
+  heldOrderName = null,
+  holding = false,
+  onAfterPaymentCompleted,
 }) => {
   const [showProcessPayment, setShowProcessPayment] = useState(false);
   const [receiptInvoice, setReceiptInvoice] = useState<InvoiceResponse | null>(null);
@@ -57,10 +69,17 @@ export const CartPane: React.FC<CartPaneProps> = ({
     setShowProcessPayment(false);
     setReceiptInvoice(invoice);
     onClearCart();
+    onAfterPaymentCompleted?.(invoice);
   };
 
   return (
     <div className="flex h-full min-h-0 flex-col">
+      {heldOrderName && (
+        <div className="mb-2 rounded-lg border border-kk-border-strong bg-kk-pri-bg px-3 py-2 text-xs text-kk-pri-text">
+          Editing held order: <span className="font-semibold">{heldOrderName}</span>
+        </div>
+      )}
+
       {/* Lines */}
       <div className="flex-1 min-h-0 space-y-2 overflow-auto py-3">
         {displayLines.length === 0 ? (
@@ -233,21 +252,23 @@ export const CartPane: React.FC<CartPaneProps> = ({
             type="button"
             className="flex-1 rounded-lg border border-kk-border-strong bg-kk-pri-bg py-2 
                         text-sm font-medium text-kk-pri-text flex justify-center items-center 
-                        gap-3 cursor-pointer hover:bg-kk-border transition-all duration-300"
+                        gap-3 cursor-pointer hover:bg-kk-border transition-all duration-300 disabled:opacity-60 disabled:cursor-not-allowed"
             onClick={onHoldOrder}
+            disabled={holding}
           >
             <StretchVertical className="w-5 h-5" />
-            Hold Order
+            {holdOrderLabel}
           </button>
           <button
             type="button"
             className="flex-1 rounded-lg bg-red-500 py-2 text-sm font-medium text-kk-sec-bg
                         flex justify-center items-center gap-3  transition-all duration-300 
-                        cursor-pointer hover:bg-red-600"
-            onClick={onClearCart}
+                        cursor-pointer hover:bg-red-600 disabled:opacity-60 disabled:cursor-not-allowed"
+            onClick={onClearAction}
+            disabled={holding}
           >
             <Trash2 className="w-6 h-6" />
-            Clear Cart
+            {clearCartLabel}
           </button>
         </div>
       </div>

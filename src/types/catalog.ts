@@ -76,6 +76,8 @@ export interface POSItem {
   returnable: boolean;
   scheduled: boolean;
   stock_qty: string;
+  primary_image?: string | null;
+  group_primary_image?: string | null;
   customized?: boolean;
   variant_key?: string | null;
   variant_data?: Record<string, number>;
@@ -112,7 +114,10 @@ export interface HeldOrderItem {
 export interface HeldOrderSummary {
   id: number;
   location: number;
+  customer_name: string;
   created_at: string;
-  items: HeldOrderItem[];
+  updated_at?: string;
+  items_count?: number;
+  items?: HeldOrderItem[];
   status: string;
 }

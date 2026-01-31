@@ -1,5 +1,6 @@
 // src/components/PosItemGroupCard.tsx
 
+import { useMemo, useState } from "react";
 import type { POSItem } from "../types/catalog";
 import { formatMoney, parseDecimal } from "../helpers/posHelpers";
 
@@ -16,6 +17,7 @@ export const PosItemGroupCard: React.FC<PosItemGroupCardProps> = ({
   inventoryTracking,
   onOpen,
 }) => {
+  const [imageError, setImageError] = useState(false);
   const prices = items.map((i) => parseDecimal(i.price, 0));
   const minPrice = Math.min(...prices);
   const maxPrice = Math.max(...prices);
@@ -25,6 +27,13 @@ export const PosItemGroupCard: React.FC<PosItemGroupCardProps> = ({
     0
   );
   const isOutOfStock = inventoryTracking && stockQty <= 0;
+
+  const imageSrc = useMemo(() => {
+    if (imageError) return null;
+    const fromGroup = items.find((i) => i.group_primary_image)?.group_primary_image ?? null;
+    const fromAnyItem = items.find((i) => i.primary_image)?.primary_image ?? null;
+    return fromGroup ?? fromAnyItem;
+  }, [imageError, items]);
 
   return (
     <button
@@ -37,8 +46,18 @@ export const PosItemGroupCard: React.FC<PosItemGroupCardProps> = ({
       onClick={isOutOfStock ? undefined : onOpen}
     >
       {/* Image placeholder */}
-      <div className="mb-2 flex h-28 w-full items-center justify-center rounded-lg bg-kk-sec-bg text-[11px] text-kk-ter-text">
-        <span>No Image</span>
+      <div className="mb-2 flex h-28 w-full items-center justify-center rounded-lg bg-kk-sec-bg text-[11px] text-kk-ter-text overflow-hidden">
+        {imageSrc ? (
+          <img
+            src={imageSrc}
+            alt={groupName}
+            loading="lazy"
+            className="h-full w-full object-cover"
+            onError={() => setImageError(true)}
+          />
+        ) : (
+          <span>No Image</span>
+        )}
       </div>
 
       {/* Name + stock */}

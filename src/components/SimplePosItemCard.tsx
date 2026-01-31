@@ -1,5 +1,6 @@
 // src/components/SimplePosItemCard.tsx
 
+import { useState } from "react";
 import type { AddToCartPayload, POSItem } from "../types/catalog";
 import { formatMoney, parseDecimal } from "../helpers/posHelpers";
 
@@ -14,9 +15,11 @@ export const SimplePosItemCard: React.FC<SimplePosItemCardProps> = ({
   onAddToCart,
   onClickItem,
 }) => {
+  const [imageError, setImageError] = useState(false);
   const stockQty = parseDecimal(item.stock_qty, 0);
   const price = parseDecimal(item.price, 0);
   const isOutOfStock = item.inventory_tracking && stockQty <= 0;
+  const imageSrc = !imageError ? (item.primary_image ?? item.group_primary_image ?? null) : null;
 
   const handleClick = () => {
     if (isOutOfStock) return;
@@ -44,8 +47,18 @@ export const SimplePosItemCard: React.FC<SimplePosItemCardProps> = ({
     >
       {/* Image placeholder */}
       <div className="mb-2 flex h-28 w-full items-center justify-center rounded-lg 
-                      bg-kk-sec-bg text-[11px] text-kk-ter-text">
-        <span>No Image</span>
+                      bg-kk-sec-bg text-[11px] text-kk-ter-text overflow-hidden">
+        {imageSrc ? (
+          <img
+            src={imageSrc}
+            alt={item.name}
+            loading="lazy"
+            className="h-full w-full object-cover"
+            onError={() => setImageError(true)}
+          />
+        ) : (
+          <span>No Image</span>
+        )}
       </div>
 
       {/* Name + stock */}
