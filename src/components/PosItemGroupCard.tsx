@@ -34,6 +34,7 @@ export const PosItemGroupCard: React.FC<PosItemGroupCardProps> = ({
     const fromAnyItem = items.find((i) => i.primary_image)?.primary_image ?? null;
     return fromGroup ?? fromAnyItem;
   }, [imageError, items]);
+  const hasImage = Boolean(imageSrc);
 
   return (
     <button
@@ -46,8 +47,8 @@ export const PosItemGroupCard: React.FC<PosItemGroupCardProps> = ({
       onClick={isOutOfStock ? undefined : onOpen}
     >
       {/* Image placeholder */}
-      <div className="mb-2 flex h-28 w-full items-center justify-center rounded-lg bg-kk-sec-bg text-[11px] text-kk-ter-text overflow-hidden">
-        {imageSrc ? (
+      <div className={`mb-2 flex h-28 w-full items-center justify-center rounded-lg ${hasImage ? "bg-kk-sec-bg" : "bg-transparent"} text-[11px] text-kk-ter-text overflow-hidden`}>
+        {hasImage ? (
           <img
             src={imageSrc}
             alt={groupName}
@@ -56,15 +57,21 @@ export const PosItemGroupCard: React.FC<PosItemGroupCardProps> = ({
             onError={() => setImageError(true)}
           />
         ) : (
-          <span>No Image</span>
+          <span className="px-2 text-center text-[20px] font-bold text-kk-pri-text line-clamp-3">
+            {groupName}
+          </span>
         )}
       </div>
 
       {/* Name + stock */}
       <div className="mb-1 flex items-center justify-between gap-1">
-        <span className="line-clamp-2 text-[13px] font-medium text-kk-pri-text">
-          {groupName}
-        </span>
+        {hasImage ? (
+          <span className="line-clamp-2 text-[13px] font-medium text-kk-pri-text">
+            {groupName}
+          </span>
+        ) : (
+          <span />
+        )}
         { inventoryTracking && stockQty > 0 && (
           <span className="text-[10px] text-kk-hover">In stock</span>
         )}

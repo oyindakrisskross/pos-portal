@@ -1,9 +1,10 @@
 // src/auth/AuthContext.tsx
 
-import React, { createContext, useContext, useEffect, useState } from "react";
+import React, { createContext, useCallback, useContext, useEffect, useState } from "react";
 import type { PermissionBitSet, Me, AuthContextValue } from "../types/auth";
 import { login as apiLogin, fetchMe as apiFetchMe } from "../api/auth";
 import { setAccessToken, setRefreshToken } from "../api/client";
+import { useInactivityLogout } from "./useInactivityLogout";
 
 const AuthContext = createContext<AuthContextValue>({} as any);
 export const useAuth = () => useContext(AuthContext);
@@ -27,11 +28,17 @@ export const AuthProvider: React.FC<React.PropsWithChildren> = ({ children }) =>
     setMe(user);
   };
 
-  const logout = () => {
+  const logout = useCallback(() => {
     setAccessToken(null);
     setRefreshToken(null);
     setMe(null);
-  };
+  }, []);
+
+  useInactivityLogout({
+    enabled: !!me && !loading,
+    timeoutMs: 30 * 60 * 1000, // 30 minutes
+    onTimeout: logout,
+  });
 
   const can = (perm: string, action: keyof PermissionBitSet = "view") => {
     if (!me) return false;

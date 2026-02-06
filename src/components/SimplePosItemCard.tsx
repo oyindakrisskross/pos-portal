@@ -20,6 +20,7 @@ export const SimplePosItemCard: React.FC<SimplePosItemCardProps> = ({
   const price = parseDecimal(item.price, 0);
   const isOutOfStock = item.inventory_tracking && stockQty <= 0;
   const imageSrc = !imageError ? (item.primary_image ?? item.group_primary_image ?? null) : null;
+  const hasImage = Boolean(imageSrc);
 
   const handleClick = () => {
     if (isOutOfStock) return;
@@ -46,9 +47,9 @@ export const SimplePosItemCard: React.FC<SimplePosItemCardProps> = ({
       onClick={handleClick}
     >
       {/* Image placeholder */}
-      <div className="mb-2 flex h-28 w-full items-center justify-center rounded-lg 
-                      bg-kk-sec-bg text-[11px] text-kk-ter-text overflow-hidden">
-        {imageSrc ? (
+      <div className={`mb-2 flex h-28 w-full items-center justify-center rounded-lg 
+                      ${hasImage ? "bg-kk-sec-bg" : "bg-transparent"} text-[11px] text-kk-ter-text overflow-hidden`}>
+        {hasImage ? (
           <img
             src={imageSrc}
             alt={item.name}
@@ -57,15 +58,21 @@ export const SimplePosItemCard: React.FC<SimplePosItemCardProps> = ({
             onError={() => setImageError(true)}
           />
         ) : (
-          <span>No Image</span>
+          <span className="px-2 text-center text-[20px] font-bold text-kk-pri-text line-clamp-3">
+            {item.name}
+          </span>
         )}
       </div>
 
       {/* Name + stock */}
       <div className="mb-1 flex items-center justify-between gap-1">
-        <span className="line-clamp-2 text-[13px] font-medium text-kk-pri-text">
-          {item.name}
-        </span>
+        {hasImage ? (
+          <span className="line-clamp-2 text-[13px] font-medium text-kk-pri-text">
+            {item.name}
+          </span>
+        ) : (
+          <span />
+        )}
         { item.inventory_tracking && stockQty > 0 && (
           <span className="text-[10px] text-kk-hover">In stock</span>
         )}
