@@ -21,6 +21,7 @@ export const PosScreen: React.FC<PosScreenProps> = ({
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [scheduleTick, setScheduleTick] = useState(0);
 
   const [openGroup, setOpenGroup] = useState<{
     groupName: string;
@@ -59,7 +60,27 @@ export const PosScreen: React.FC<PosScreenProps> = ({
     return () => {
       cancelled = true;
     };
-  }, [locationId, search]);
+  }, [locationId, search, scheduleTick]);
+
+  useEffect(() => {
+    let timer: number | null = null;
+
+    const scheduleNextTick = () => {
+      const now = new Date();
+      const msToNextMinute =
+        (60 - now.getSeconds()) * 1000 - now.getMilliseconds();
+      const delay = Math.max(msToNextMinute, 250);
+      timer = window.setTimeout(() => {
+        setScheduleTick((t) => t + 1);
+        scheduleNextTick();
+      }, delay);
+    };
+
+    scheduleNextTick();
+    return () => {
+      if (timer) window.clearTimeout(timer);
+    };
+  }, []);
 
   const grouped = useMemo(() => {
     const byGroup: Record<string, POSItem[]> = {};
