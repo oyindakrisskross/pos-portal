@@ -125,12 +125,17 @@ export const ProcessPaymentModal: React.FC<ProcessPaymentModalProps> = ({
   //   setAmountPaid(v);
   // };
 
+  const grandTotal = pricing?.grandTotal ?? 0;
+  const paidNumber = Number(amountPaid || 0);
+  const hasValidPayment =
+    paidNumber > 0 || (grandTotal <= 0 && paidNumber === 0);
+
   const canSubmit =
     !cartIsEmpty &&
     !submitting &&
     !pricingLoading &&
     !!pricing &&
-    Number(amountPaid || 0) > 0;
+    hasValidPayment;
 
   const handleSubmit = async () => {
     if (!canSubmit || !pricing) return;
