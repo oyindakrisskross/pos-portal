@@ -288,28 +288,77 @@ export const PosApp: React.FC<Props> = ({
   const getHeldOrder = useCallback(
     async (heldOrderId: number): Promise<AddToCartPayload[]> => {
       const data = await loadHeldOrder(heldOrderId);
+      const rows = Array.isArray(data?.items) ? data.items : [];
 
-      const lines = await Promise.all(
-        data.items.map(async (row: any): Promise<AddToCartPayload> => {
-          const item = await fetchPOSItem(row.item, { location_id: locationId });
+      // Held payload is parent row followed by optional customization rows.
+      // Rebuild cart lines from that structure instead of treating child rows as standalone products.
+      const pending: Array<{
+        itemId: number;
+        quantity: number;
+        customizations: Array<{ customizationId: number; quantity: number }>;
+      }> = [];
 
-          const customizations =
-            row.customization_id && row.customization_qty
-              ? [
-                  {
-                    customizationId: Number(row.customization_id),
-                    quantity: Number(row.customization_qty),
-                  },
-                ]
-              : [];
+      let currentParentIndex = -1;
 
+      rows.forEach((row: any) => {
+        const customizationIdRaw = row?.customization_id;
+        const customizationId =
+          customizationIdRaw === null || customizationIdRaw === undefined
+            ? 0
+            : Number(customizationIdRaw);
+
+        if (customizationId > 0 && currentParentIndex >= 0) {
+          const customQtyRaw = Number(row?.customization_qty ?? 0);
+          const customQty = Number.isFinite(customQtyRaw) ? customQtyRaw : 0;
+          if (customQty <= 0) return;
+
+          const parent = pending[currentParentIndex];
+          const existing = parent.customizations.find(
+            (c) => c.customizationId === customizationId
+          );
+          if (existing) {
+            existing.quantity += customQty;
+          } else {
+            parent.customizations.push({
+              customizationId,
+              quantity: customQty,
+            });
+          }
+          return;
+        }
+
+        const itemId = Number(row?.item);
+        const quantityRaw = Number(row?.quantity ?? 0);
+        const quantity = Number.isFinite(quantityRaw) ? quantityRaw : 0;
+
+        if (!Number.isFinite(itemId) || quantity <= 0) return;
+
+        pending.push({
+          itemId,
+          quantity,
+          customizations: [],
+        });
+        currentParentIndex = pending.length - 1;
+      });
+
+      const results = await Promise.allSettled(
+        pending.map(async (line): Promise<AddToCartPayload> => {
+          const item = await fetchPOSItem(line.itemId, { location_id: locationId });
           return {
             item,
-            quantity: Number(row.quantity),
-            customizations,
+            quantity: line.quantity,
+            customizations: line.customizations,
           };
         })
       );
+
+      const lines: AddToCartPayload[] = [];
+      results.forEach((res) => {
+        if (res.status === "fulfilled") {
+          lines.push(res.value);
+        }
+      });
+
       return lines;
     },
     [locationId]
