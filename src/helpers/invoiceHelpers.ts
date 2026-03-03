@@ -21,6 +21,7 @@ export interface BuildCheckoutContext {
   customerId?: number | null;
   notes?: string;
   couponCode?: string;
+  couponCodes?: string[];
 }
 
 function resolveCustomizationUnitPrice(def: ItemCustomization): string {
@@ -151,7 +152,8 @@ export function buildPriceCartPreviewPayload(
   locationId: number,
   invoiceDiscountType: InvoiceDiscountType = "AMOUNT",
   invoiceDiscountValue = "0.00",
-  couponCode = ""
+  couponCode = "",
+  couponCodes: string[] = []
 ): PriceCartPreviewPayload {
   const items = buildPriceCartItemsFromCart(cart);
 
@@ -160,6 +162,7 @@ export function buildPriceCartPreviewPayload(
     invoice_discount_type: invoiceDiscountType,
     invoice_discount_value: invoiceDiscountValue,
     coupon_code: couponCode,
+    coupon_codes: couponCodes,
     items,
   };
 }
@@ -186,6 +189,7 @@ export function buildPOSCheckoutRequest(
     customer: ctx.customerId ?? null,
     notes: ctx.notes ?? "",
     coupon_code: ctx.couponCode ?? "",
+    coupon_codes: ctx.couponCodes ?? (ctx.couponCode ? [ctx.couponCode] : []),
     invoice_discount_type: ctx.discountType ?? "AMOUNT",
     invoice_discount_value: ctx.discountValue ?? "0.00",
     items,

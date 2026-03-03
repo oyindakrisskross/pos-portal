@@ -35,6 +35,7 @@ export interface InvoiceCheckoutPayload {
   type_id: "SALE" | "REFUND";
   notes?: string;
   coupon_code?: string;
+  coupon_codes?: string[];
   invoice_discount_type: InvoiceDiscountType;
   invoice_discount_value: string;
   items: InvoiceItemInput[];
@@ -60,14 +61,20 @@ export interface PriceCartPreviewPayload {
   invoice_discount_type: InvoiceDiscountType;
   invoice_discount_value: string;
   coupon_code?: string;
+  coupon_codes?: string[];
   items: PriceCartItemInput[];
 }
 
 export interface AppliedCoupon {
+  name?: string;
+  coupon_name?: string;
   code: string;
   type: string;          // "AMOUNT" | "PERCENT" | "LINE"
   value: string;
   amount_applied: string;
+  priority?: number;
+  allow_combine?: boolean;
+  action_type?: string;
 }
 
 // A child line embedded under a parent in "children"
@@ -113,6 +120,7 @@ export interface InvoiceResponse {
   type_id: "SALE" | "REFUND";        // currently "SALE" in your examples
   status: "PAID" | "DRAFT" | "VOID" | string;
   coupon_code?: string;
+  coupon_codes?: string[];
   location: number;
   location_name: string;
   customer: number | null;

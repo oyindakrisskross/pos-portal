@@ -18,7 +18,7 @@ interface ProcessPaymentModalProps {
   isOpen: boolean;
   locationId: number;
   cart: CartLine[];
-  appliedCoupon?: AppliedCoupon | null;
+  appliedCoupons?: AppliedCoupon[];
   onClose: () => void;
   onPaymentCompleted: (invoice: InvoiceResponse) => void;
 }
@@ -35,15 +35,15 @@ export const ProcessPaymentModal: React.FC<ProcessPaymentModalProps> = ({
   isOpen,
   locationId,
   cart,
-  appliedCoupon: appliedCouponProp,
+  appliedCoupons: appliedCouponsProp = [],
   onClose,
   onPaymentCompleted,
 }) => {
   const [pricing, setPricing] = useState<CartPricingSummary | null>(null);
   const [pricingLoading, setPricingLoading] = useState(false);
   const [pricingError, setPricingError] = useState<string | null>(null);
-  const [appliedCoupon, setAppliedCoupon] = useState<AppliedCoupon | null>(
-    appliedCouponProp ?? null
+  const [appliedCoupons, setAppliedCoupons] = useState<AppliedCoupon[]>(
+    appliedCouponsProp ?? []
   );
 
   const [paymentMethod, setPaymentMethod] =
@@ -53,6 +53,8 @@ export const ProcessPaymentModal: React.FC<ProcessPaymentModalProps> = ({
   const [submitError, setSubmitError] = useState<string | null>(null);
 
   const cartIsEmpty = cart.length === 0;
+  const hasManualCoupon = (appliedCouponsProp ?? []).some((c) => Boolean(c?.code));
+  const hasCheckoutSource = !cartIsEmpty || hasManualCoupon;
 
   const apiErrorMessage = (err: any, fallback: string) => {
     const data = err?.response?.data;
@@ -67,10 +69,10 @@ export const ProcessPaymentModal: React.FC<ProcessPaymentModalProps> = ({
 
   // Whenever modal opens or cart changes, fetch a fresh preview
   useEffect(() => {
-    if (!isOpen || cartIsEmpty) {
+    if (!isOpen || !hasCheckoutSource) {
       setPricing(null);
       setPricingError(null);
-      setAppliedCoupon(appliedCouponProp ?? null);
+      setAppliedCoupons(appliedCouponsProp ?? []);
       return;
     }
 
@@ -84,13 +86,22 @@ export const ProcessPaymentModal: React.FC<ProcessPaymentModalProps> = ({
           locationId,
           "AMOUNT",
           "0.00",
-          appliedCouponProp?.code ?? ""
+          appliedCouponsProp?.[0]?.code ?? "",
+          appliedCouponsProp.map((c) => c.code)
         );
 
         const data = await fetchPriceCart(payload);
         const summary = parseCartPricingSummary(data);
         setPricing(summary);
-        setAppliedCoupon((data?.applied_coupon as AppliedCoupon) ?? null);
+        setAppliedCoupons(
+          (
+            Array.isArray(data?.applied_coupons)
+              ? data.applied_coupons
+              : data?.applied_coupon
+                ? [data.applied_coupon]
+                : []
+          ).filter((c: any) => c?.code) as AppliedCoupon[]
+        );
 
         // default quick amount: grand total
         setAmountPaid(summary.grandTotal.toString());
@@ -102,7 +113,7 @@ export const ProcessPaymentModal: React.FC<ProcessPaymentModalProps> = ({
     };
 
     fetchPricing();
-  }, [isOpen, cart, cartIsEmpty, locationId, appliedCouponProp?.code]);
+  }, [isOpen, cart, hasCheckoutSource, locationId, appliedCouponsProp]);
 
   // Buttons (grand total + a few handy fixed values)
   // const quickAmounts = useMemo(() => {
@@ -125,13 +136,15 @@ export const ProcessPaymentModal: React.FC<ProcessPaymentModalProps> = ({
   //   setAmountPaid(v);
   // };
 
+  const appliedCouponCodes = appliedCoupons.map((c) => c.code).filter(Boolean);
+
   const grandTotal = pricing?.grandTotal ?? 0;
   const paidNumber = Number(amountPaid || 0);
   const hasValidPayment =
     paidNumber > 0 || (grandTotal <= 0 && paidNumber === 0);
 
   const canSubmit =
-    !cartIsEmpty &&
+    hasCheckoutSource &&
     !submitting &&
     !pricingLoading &&
     !!pricing &&
@@ -151,7 +164,8 @@ export const ProcessPaymentModal: React.FC<ProcessPaymentModalProps> = ({
         amountPaid,
         customerId: null,
         notes: "",
-        couponCode: appliedCoupon?.code ?? "",
+        couponCode: appliedCouponCodes[0] ?? "",
+        couponCodes: appliedCouponCodes,
       };
 
       const payload = buildPOSCheckoutRequest(cart, ctx);
@@ -208,7 +222,9 @@ export const ProcessPaymentModal: React.FC<ProcessPaymentModalProps> = ({
                 {pricing.discountTotal > 0 && (
                   <div className="mt-1 flex justify-between text-sm text-kk-err">
                     <span>
-                      {appliedCoupon?.code ? `Coupon (${appliedCoupon.code})` : "Discount"}
+                      {appliedCouponCodes.length
+                        ? `Coupon${appliedCouponCodes.length > 1 ? "s" : ""} (${appliedCouponCodes.join(", ")})`
+                        : "Discount"}
                     </span>
                     <span>-{formatMoney(pricing.discountTotal)}</span>
                   </div>

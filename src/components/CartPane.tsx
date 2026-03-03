@@ -8,14 +8,15 @@ import { ReceiptModal } from "./ReceiptModal";
 import type { AppliedCoupon, InvoiceResponse } from "../types/invoice";
 import { CreditCard, ShoppingCart, StretchVertical, Trash2 } from "lucide-react";
 import { ScanCodeModal } from "./ScanCodeModal";
+import { SlotAnimatedValue } from "./SlotAnimatedValue";
 
 
 interface CartPaneProps {
   lines: CartLine[];
   promoLines?: CartLine[];
   pricing: CartPricingSummary | null;
-  appliedCoupon?: AppliedCoupon | null;
-  manualCouponCode?: string;
+  appliedCoupons?: AppliedCoupon[];
+  manualCouponCodes?: string[];
   lineDiscounts?: Record<string, number>;
   onChangeQty: (lineId: string, delta: number) => void;
   onRemoveLine: (lineId: string) => void;
@@ -23,6 +24,7 @@ interface CartPaneProps {
   onClearAction: () => void;
   // Keep "Apply Discount" simple for now - can expand later
   onApplyDiscountCode: (raw: string) => Promise<{ ok: boolean; error?: string }>;
+  onRedeemEntryPassCode: (raw: string) => Promise<{ ok: boolean; error?: string }>;
   onRemoveDiscount: () => void;
   onHoldOrder?: () => void;
   locationId: number;
@@ -37,8 +39,8 @@ export const CartPane: React.FC<CartPaneProps> = ({
   lines,
   promoLines,
   pricing,
-  appliedCoupon,
-  manualCouponCode,
+  appliedCoupons = [],
+  manualCouponCodes = [],
   lineDiscounts,
   onChangeQty,
   onRemoveLine,
@@ -48,6 +50,7 @@ export const CartPane: React.FC<CartPaneProps> = ({
   onHoldOrder,
   locationId,
   onApplyDiscountCode,
+  onRedeemEntryPassCode,
   holdOrderLabel = "Hold Order",
   clearCartLabel = "Clear Cart",
   heldOrderName = null,
@@ -57,10 +60,12 @@ export const CartPane: React.FC<CartPaneProps> = ({
   const [showProcessPayment, setShowProcessPayment] = useState(false);
   const [receiptInvoice, setReceiptInvoice] = useState<InvoiceResponse | null>(null);
   const [showApplyDiscount, setShowApplyDiscount] = useState(false);
+  const [showRedeemEntryPass, setShowRedeemEntryPass] = useState(false);
 
   const subtotal = pricing?.subtotal ?? 0;
   const taxTotal = pricing?.taxTotal ?? 0;
   const discountTotal = pricing?.discountTotal ?? 0;
+  const appliedCouponCodes = appliedCoupons.map((c) => c.code).filter(Boolean);
   const grandTotal = pricing?.grandTotal ?? 0;
 
   const displayLines = [...lines, ...(promoLines ?? [])];
@@ -189,7 +194,6 @@ export const CartPane: React.FC<CartPaneProps> = ({
           <button
             type="button"
             className="flex flex-1 items-center justify-center gap-2 rounded-lg border bg-kk-pri-bg py-2 text-[11px] font-medium text-gray-800 disabled:cursor-not-allowed disabled:opacity-60"
-            disabled={displayLines.length === 0}
             onClick={() => setShowApplyDiscount(true)}
           >
             <span>%</span>
@@ -199,9 +203,9 @@ export const CartPane: React.FC<CartPaneProps> = ({
           <button
             type="button"
             className="flex flex-1 items-center justify-center gap-2 rounded-lg border bg-kk-pri-bg py-2 text-[11px] font-medium text-kk-err disabled:cursor-not-allowed disabled:opacity-60"
-            disabled={displayLines.length === 0 || !manualCouponCode}
+            disabled={displayLines.length === 0 || !manualCouponCodes.length}
             onClick={onRemoveDiscount}
-            title={manualCouponCode ? "Remove scanned coupon" : "No scanned coupon to remove"}
+            title={manualCouponCodes.length ? "Remove scanned coupon(s)" : "No scanned coupon to remove"}
           >
             <span>x</span>
             <span>Remove Discount</span>
@@ -213,25 +217,27 @@ export const CartPane: React.FC<CartPaneProps> = ({
             <span>
               Subtotal ({displayLines.length} item{displayLines.length === 1 ? "" : "s"})
             </span>
-            <span>{formatMoney(subtotal)}</span>
+            <SlotAnimatedValue value={formatMoney(subtotal)} className="text-kk-pri-text/90" />
           </div>
           <div className="flex justify-between">
             <span>VAT (7.5%)</span>
-            <span>{formatMoney(taxTotal)}</span>
+            <SlotAnimatedValue value={formatMoney(taxTotal)} className="text-kk-pri-text/90" />
           </div>
           {discountTotal > 0 && (
             <div className="flex justify-between text-kk-err">
               <span>
-                {appliedCoupon?.code ? `Coupon (${appliedCoupon.code})` : "Discount"}
+                {appliedCouponCodes.length
+                  ? `Coupon${appliedCouponCodes.length > 1 ? "s" : ""} (${appliedCouponCodes.join(", ")})`
+                  : "Discount"}
               </span>
-              <span>-{formatMoney(discountTotal)}</span>
+              <SlotAnimatedValue value={`-${formatMoney(discountTotal)}`} />
             </div>
           )}
         </div>
 
         <div className="flex items-center justify-between text-lg font-semibold text-kk-pri-text">
           <span>Total</span>
-          <span>{formatMoney(grandTotal)}</span>
+          <SlotAnimatedValue value={formatMoney(grandTotal)} />
         </div>
 
         <button
@@ -271,13 +277,21 @@ export const CartPane: React.FC<CartPaneProps> = ({
             {clearCartLabel}
           </button>
         </div>
+
+        <button
+          type="button"
+          className="w-full rounded-lg border bg-kk-pri-bg py-2 text-[11px] font-medium text-gray-800 cursor-pointer hover:bg-kk-border transition-all duration-300"
+          onClick={() => setShowRedeemEntryPass(true)}
+        >
+          Redeem Free Entry Pass
+        </button>
       </div>
 
       <ProcessPaymentModal
         isOpen={showProcessPayment}
         locationId={locationId}
         cart={lines}
-        appliedCoupon={appliedCoupon ?? null}
+        appliedCoupons={appliedCoupons}
         onClose={() => setShowProcessPayment(false)}
         onPaymentCompleted={handlePaymentCompleted}
       />
@@ -295,6 +309,14 @@ export const CartPane: React.FC<CartPaneProps> = ({
         subtitle="Please scan discount QR code"
         onClose={() => setShowApplyDiscount(false)}
         onCode={onApplyDiscountCode}
+      />
+
+      <ScanCodeModal
+        isOpen={showRedeemEntryPass}
+        title="Redeem Free Entry Pass"
+        subtitle="Please scan subscription pass QR code"
+        onClose={() => setShowRedeemEntryPass(false)}
+        onCode={onRedeemEntryPassCode}
       />
     </div>
   );

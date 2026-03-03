@@ -21,6 +21,7 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({
 
   const topLevelItems = invoice.items.filter((ln) => ln.parent_line === null);
   const payments = invoice.payments;
+  const couponCodes = (invoice.coupon_codes?.length ? invoice.coupon_codes : invoice.coupon_code ? [invoice.coupon_code] : []).filter(Boolean);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-kk-border-strong/60">
@@ -134,9 +135,9 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({
                   <span>Discount:</span>
                   <span>-{formatMoney(invoice.discount_total)}</span>
                 </div>
-                {invoice.coupon_code && (
+                {couponCodes.length > 0 && (
                   <div className="text-[10px] text-kk-sec-text">
-                    Code: {invoice.coupon_code}
+                    Code{couponCodes.length > 1 ? "s" : ""}: {couponCodes.join(", ")}
                   </div>
                 )}
               </>

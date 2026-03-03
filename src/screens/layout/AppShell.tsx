@@ -28,6 +28,8 @@ import { useAuth } from "../../auth/AuthContext";
 import type { AppliedCoupon } from "../../types/invoice";
 import { parseDecimal } from "../../helpers/posHelpers";
 import { fetchOutlets } from "../../api/auth";
+import { CouponDecisionModal } from "../../components/CouponDecisionModal";
+import { consumeSubscriptionEntryPass } from "../../api/entryPass";
 
 
 function makeLineId(counter: number) {
@@ -50,8 +52,13 @@ export const PosApp: React.FC<Props> = ({
   const [cart, setCart] = useState<CartLine[]>([]);
   const [promoLines, setPromoLines] = useState<CartLine[]>([]);
   const [pricing, setPricing] = useState<CartPricingSummary | null>(null);
-  const [appliedCoupon, setAppliedCoupon] = useState<AppliedCoupon | null>(null);
-  const [manualCouponCode, setManualCouponCode] = useState<string>("");
+  const [appliedCoupons, setAppliedCoupons] = useState<AppliedCoupon[]>([]);
+  const [manualCouponCodes, setManualCouponCodes] = useState<string[]>([]);
+  const [scanDecision, setScanDecision] = useState<{
+    scannedCode: string;
+    scannedName: string;
+    combineAvailable: boolean;
+  } | null>(null);
   const [lineDiscounts, setLineDiscounts] = useState<Record<string, number>>({});
   const [heldOpen, setHeldOpen] = useState(false);
   const [activeHeldOrder, setActiveHeldOrder] = useState<{ id: number; customer_name: string } | null>(null);
@@ -162,8 +169,14 @@ export const PosApp: React.FC<Props> = ({
       grandTotal: parseFloat(data.grand_total ?? "0") || 0,
     });
 
-    const nextApplied = (data?.applied_coupon as AppliedCoupon) ?? null;
-    setAppliedCoupon(nextApplied);
+    const nextAppliedCoupons = (
+      Array.isArray(data?.applied_coupons)
+        ? data.applied_coupons
+        : data?.applied_coupon
+          ? [data.applied_coupon]
+          : []
+    ).filter((c: any) => c?.code) as AppliedCoupon[];
+    setAppliedCoupons(nextAppliedCoupons);
 
     const nextDiscounts: Record<string, number> = {};
     const pricedLines: any[] = Array.isArray(data?.lines) ? data.lines : [];
@@ -176,8 +189,7 @@ export const PosApp: React.FC<Props> = ({
     });
 
     const bonusLines: any[] = Array.isArray(data?.bonus_lines) ? data.bonus_lines : [];
-    const isBxgy = String(nextApplied?.type ?? "").toUpperCase() === "BXGY";
-    if (isBxgy && bonusLines.length) {
+    if (bonusLines.length) {
       const promo = await Promise.all(
         bonusLines.map(async (b, idx) => {
           const itemId = Number(b?.item_id);
@@ -198,7 +210,7 @@ export const PosApp: React.FC<Props> = ({
             sourceLine?.item ??
             (await fetchPOSItem(itemId, { location_id: locationId }));
           return {
-            id: `promo-${nextApplied?.code ?? "bxgy"}-${itemId}-${idx}`,
+            id: `promo-${nextAppliedCoupons[0]?.code ?? "coupon"}-${itemId}-${idx}`,
             item,
             quantity: qty,
             customizations: [],
@@ -414,7 +426,9 @@ export const PosApp: React.FC<Props> = ({
   const handleClearCart = () => {
     setCart([]);
     setPromoLines([]);
-    setManualCouponCode("");
+    setManualCouponCodes([]);
+    setAppliedCoupons([]);
+    setScanDecision(null);
   };
 
   const buildHoldItemsPayload = useCallback((cartLines: CartLine[]) => {
@@ -539,60 +553,181 @@ export const PosApp: React.FC<Props> = ({
   }, [activeHeldOrder, showToast]);
 
 
-  const applyDiscountFromRaw = async (
-    raw: string
-  ): Promise<{ ok: boolean; error?: string }> => {
+  const parseScannedCouponCode = (raw: string): { code?: string; error?: string } => {
     const trimmed = String(raw || "").trim();
-    if (!trimmed) return { ok: false, error: "No code detected." };
-    if (cart.length === 0) return { ok: false, error: "Cart is empty." };
+    if (!trimmed) return { error: "No code detected." };
 
     const prefixed = trimmed.match(/^([A-Z_]{2,20}):(.*)$/);
     if (prefixed) {
       const prefix = prefixed[1];
       const rest = (prefixed[2] || "").trim();
-      if (prefix !== "COUPON") {
-        return { ok: false, error: `Unsupported QR type: ${prefix}` };
-      }
-      if (!rest) return { ok: false, error: "Coupon code is missing." };
+      if (prefix !== "COUPON") return { error: `Unsupported QR type: ${prefix}` };
+      if (!rest) return { error: "Coupon code is missing." };
+      return { code: rest };
     }
 
-    const couponCode = prefixed ? (prefixed[2] || "").trim() : trimmed;
-    const { itemsPayload, payloadToCartLine } = buildPriceCartPayload(cart);
+    return { code: trimmed };
+  };
 
+  const parseScannedEntryPassToken = (raw: string): { token?: string; error?: string } => {
+    const trimmed = String(raw || "").trim();
+    if (!trimmed) return { error: "No token detected." };
+
+    const prefixed = trimmed.match(/^([A-Z_]{2,30}):(.*)$/);
+    if (prefixed) {
+      const prefix = prefixed[1];
+      const rest = (prefixed[2] || "").trim();
+      if (prefix !== "SUBSCRIPTION" && prefix !== "ENTRY_PASS") {
+        return { error: `Unsupported QR type: ${prefix}` };
+      }
+      if (!rest) return { error: "Pass token is missing." };
+      return { token: rest };
+    }
+
+    return { token: trimmed };
+  };
+
+  const getCouponDisplayName = (coupon: any, fallbackLabel = "Coupon"): string => {
+    const name = coupon?.name ?? coupon?.coupon_name;
+    const display = String(name || "").trim();
+    return display || fallbackLabel;
+  };
+
+  const previewCouponCodes = async (
+    couponCodes: string[]
+  ): Promise<{ ok: boolean; data?: any; error?: string; reason?: string }> => {
+    const normalizedCodes = Array.from(
+      new Set(couponCodes.map((c) => String(c || "").trim()).filter(Boolean))
+    );
+    const { itemsPayload } = buildPriceCartPayload(cart);
     try {
       const data = await fetchPriceCart({
         location: locationId,
         items: itemsPayload,
-        coupon_code: couponCode,
+        coupon_code: normalizedCodes[0] || undefined,
+        coupon_codes: normalizedCodes,
       });
-
       const couponError = data?.coupon_error;
       if (couponError) {
         return {
           ok: false,
           error: String(couponError?.detail || "Coupon not valid."),
+          reason: String(couponError?.reason || ""),
         };
       }
-
-      const nextApplied = (data?.applied_coupon as AppliedCoupon) ?? null;
-      if (
-        !nextApplied?.code ||
-        String(nextApplied.code).toUpperCase() !== couponCode.toUpperCase()
-      ) {
-        return { ok: false, error: "Coupon could not be applied to this cart." };
-      }
-
-      setManualCouponCode(couponCode);
-      await applyPriceCartResponse(data, payloadToCartLine, cart);
-      return { ok: true };
+      return { ok: true, data };
     } catch (e: any) {
       return { ok: false, error: e?.message || "Unable to apply coupon." };
     }
   };
 
+  const applyCouponCodes = async (
+    couponCodes: string[]
+  ): Promise<{ ok: boolean; error?: string }> => {
+    const normalizedCodes = Array.from(
+      new Set(couponCodes.map((c) => String(c || "").trim()).filter(Boolean))
+    );
+    const attempt = await previewCouponCodes(normalizedCodes);
+    if (!attempt.ok || !attempt.data) {
+      return { ok: false, error: attempt.error || "Unable to apply coupon." };
+    }
+
+    const { payloadToCartLine } = buildPriceCartPayload(cart);
+    setManualCouponCodes(normalizedCodes);
+    await applyPriceCartResponse(attempt.data, payloadToCartLine, cart);
+    return { ok: true };
+  };
+
+  const applyDiscountFromRaw = async (
+    raw: string
+  ): Promise<{ ok: boolean; error?: string }> => {
+    const parsed = parseScannedCouponCode(raw);
+    if (parsed.error) return { ok: false, error: parsed.error };
+    const couponCode = parsed.code!;
+
+    const overridePreview = await previewCouponCodes([couponCode]);
+    if (!overridePreview.ok) {
+      return { ok: false, error: overridePreview.error || "Coupon not valid." };
+    }
+
+    const overrideCoupons = (
+      Array.isArray(overridePreview.data?.applied_coupons)
+        ? overridePreview.data.applied_coupons
+        : overridePreview.data?.applied_coupon
+          ? [overridePreview.data.applied_coupon]
+          : []
+    ).filter((c: any) => c?.code);
+    const scannedCoupon =
+      overrideCoupons.find(
+        (c: any) =>
+          String(c?.code || "").trim().toLowerCase() === couponCode.toLowerCase()
+      ) ?? overrideCoupons[0];
+    const scannedName = getCouponDisplayName(scannedCoupon, "Coupon");
+
+    const currentCodes = appliedCoupons.map((c) => c.code).filter(Boolean);
+    if (!currentCodes.length) {
+      return applyCouponCodes([couponCode]);
+    }
+
+    const combinePreview = await previewCouponCodes([...currentCodes, couponCode]);
+    const combineAvailable = Boolean(combinePreview.ok);
+    setScanDecision({ scannedCode: couponCode, scannedName, combineAvailable });
+    return { ok: true };
+  };
+
+  const redeemEntryPassFromRaw = async (
+    raw: string
+  ): Promise<{ ok: boolean; error?: string }> => {
+    const parsed = parseScannedEntryPassToken(raw);
+    if (parsed.error) return { ok: false, error: parsed.error };
+
+    try {
+      const data = await consumeSubscriptionEntryPass({
+        qr_token: parsed.token!,
+        location_id: locationId,
+        pos_reference: `POS-PASS-${Date.now()}`,
+      });
+
+      const used = Number(data?.used_uses ?? 0);
+      const totalRaw = data?.total_uses;
+      const total =
+        totalRaw === null || totalRaw === undefined ? null : Number(totalRaw);
+
+      if (total !== null && Number.isFinite(total) && total > 0) {
+        showToast(`Free Entry Pass redeemed (${used}/${total} used).`);
+      } else {
+        showToast("Free Entry Pass redeemed.");
+      }
+
+      return { ok: true };
+    } catch (e: any) {
+      const detail = String(
+        e?.response?.data?.detail || e?.message || "Unable to redeem pass."
+      );
+      return { ok: false, error: detail };
+    }
+  };
+
+  const handleOverrideScannedCoupon = async () => {
+    if (!scanDecision?.scannedCode) return;
+    const scanned = scanDecision.scannedCode;
+    setScanDecision(null);
+    const res = await applyCouponCodes([scanned]);
+    if (!res.ok) showToast(res.error || "Unable to apply coupon.");
+  };
+
+  const handleCombineScannedCoupon = async () => {
+    if (!scanDecision?.scannedCode) return;
+    const scanned = scanDecision.scannedCode;
+    const currentCodes = appliedCoupons.map((c) => c.code).filter(Boolean);
+    setScanDecision(null);
+    const res = await applyCouponCodes([...currentCodes, scanned]);
+    if (!res.ok) showToast(res.error || "Unable to combine coupon.");
+  };
+
   const handleRemoveDiscount = async () => {
-    if (!manualCouponCode) return;
-    setManualCouponCode("");
+    if (!manualCouponCodes.length) return;
+    setManualCouponCodes([]);
 
     if (cart.length === 0) return;
 
@@ -615,15 +750,14 @@ export const PosApp: React.FC<Props> = ({
     const controller = new AbortController();
 
     async function priceCart() {
-      if (cart.length === 0) {
+      if (cart.length === 0 && !manualCouponCodes.length) {
         setPricing({
           subtotal: 0,
           taxTotal: 0,
           discountTotal: 0,
           grandTotal: 0,
         });
-        setAppliedCoupon(null);
-        setManualCouponCode("");
+        setAppliedCoupons([]);
         setLineDiscounts({});
         setPromoLines([]);
         return;
@@ -637,12 +771,13 @@ export const PosApp: React.FC<Props> = ({
         const data = await fetchPriceCart({
           location: locationId,
           items: itemsPayload,
-          coupon_code: manualCouponCode || undefined,
+          coupon_code: manualCouponCodes[0] || undefined,
+          coupon_codes: manualCouponCodes.length ? manualCouponCodes : undefined,
         });
 
         if (cancelled) return;
-        if (manualCouponCode && data?.coupon_error) {
-          setManualCouponCode("");
+        if (manualCouponCodes.length && data?.coupon_error) {
+          setManualCouponCodes([]);
         }
         await applyPriceCartResponse(data, payloadToCartLine, cart);
       } catch (err) {
@@ -657,7 +792,7 @@ export const PosApp: React.FC<Props> = ({
       cancelled = true;
       controller.abort();
     };
-  }, [cart, locationId, manualCouponCode]);
+  }, [cart, locationId, manualCouponCodes]);
 
   const [now, setNow] = useState(() => new Date());
 
@@ -782,14 +917,15 @@ export const PosApp: React.FC<Props> = ({
                     lines={cart}
                     promoLines={promoLines}
                     pricing={pricing}
-                    appliedCoupon={appliedCoupon}
-                    manualCouponCode={manualCouponCode}
+                    appliedCoupons={appliedCoupons}
+                    manualCouponCodes={manualCouponCodes}
                     lineDiscounts={lineDiscounts}
                     onChangeQty={handleChangeQty}
                     onRemoveLine={handleRemoveLine}
                     onClearCart={handleClearCart}
                     onClearAction={activeHeldOrder ? handleCancelHeldOrder : handleClearCart}
                     onApplyDiscountCode={applyDiscountFromRaw}
+                    onRedeemEntryPassCode={redeemEntryPassFromRaw}
                     onRemoveDiscount={handleRemoveDiscount}
                     onHoldOrder={handleHoldOrder}
                     locationId={locationId}
@@ -829,6 +965,16 @@ export const PosApp: React.FC<Props> = ({
           setHoldNameOpen(false);
           saveNewHeldOrder(name);
         }}
+      />
+
+      <CouponDecisionModal
+        isOpen={Boolean(scanDecision)}
+        currentCoupons={appliedCoupons.map((c, idx) => getCouponDisplayName(c, `Coupon ${idx + 1}`))}
+        scannedCouponName={scanDecision?.scannedName || "Coupon"}
+        combineAvailable={Boolean(scanDecision?.combineAvailable)}
+        onClose={() => setScanDecision(null)}
+        onOverride={handleOverrideScannedCoupon}
+        onCombine={handleCombineScannedCoupon}
       />
 
       {toast && (
