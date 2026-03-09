@@ -94,6 +94,27 @@ export interface AddToCartPayload {
 export interface CartLine extends AddToCartPayload {
   id: string;
   promo?: boolean;
+  prepaid?: boolean;
+  redeemSource?: "PREPAID" | "SUBSCRIPTION";
+  prepaidInvoiceId?: number;
+  prepaidNumber?: string;
+  prepaidInvoiceLineId?: number;
+  prepaidMaxQty?: number;
+  subscriptionToken?: string;
+  subscriptionId?: number;
+  subscriptionPlanItemId?: number;
+  subscriptionSale?: {
+    planId: number;
+    planCode: string;
+    planName: string;
+    productId: number;
+    productName: string;
+    planType: "CYCLE" | "USAGE";
+    billingFrequencyValue: number;
+    billingFrequencyUnit: "DAY" | "WEEK" | "MONTH" | "YEAR";
+    setupFee: string;
+    salesTaxRate?: string | null;
+  };
 }
 
 export interface CartPricingSummary {

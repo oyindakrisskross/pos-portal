@@ -8,7 +8,7 @@ interface Props {
 }
 
 const btn =
-  "h-12 rounded-lg border border-kk-border bg-kk-pri-bg text-kk-pri-text text-lg font-semibold hover:bg-kk-border transition-all disabled:opacity-50 disabled:cursor-not-allowed";
+  "h-12 rounded-lg border border-kk-border bg-kk-pri-bg text-kk-pri-text text-lg font-semibold appearance-none select-none transition-none hover:bg-kk-pri-bg active:bg-kk-pri-bg focus:bg-kk-pri-bg focus:outline-none [-webkit-tap-highlight-color:transparent] disabled:opacity-50 disabled:cursor-not-allowed";
 
 export const PinPad: React.FC<Props> = ({
   value,

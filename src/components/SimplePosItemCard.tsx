@@ -51,7 +51,7 @@ export const SimplePosItemCard: React.FC<SimplePosItemCardProps> = ({
                       ${hasImage ? "bg-kk-sec-bg" : "bg-transparent"} text-[11px] text-kk-ter-text overflow-hidden`}>
         {hasImage ? (
           <img
-            src={imageSrc}
+            src={imageSrc || undefined}
             alt={item.name}
             loading="lazy"
             className="h-full w-full object-cover"

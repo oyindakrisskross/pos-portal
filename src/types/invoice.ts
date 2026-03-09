@@ -85,6 +85,8 @@ export interface InvoiceItemChild {
   description: string;
   customization_label: string; // "Crash Course", "No Sugar", or "" if none
   quantity: string;            // decimal as string, e.g. "5.00"
+  redeemed_quantity?: string;
+  redeem_status?: "UNUSED" | "PARTIALLY_REDEEMED" | "REDEEMED" | string;
   unit_price: string;          // decimal as string
   discount_amount: string;
   line_total: string;          // decimal as string
@@ -98,6 +100,8 @@ export interface InvoiceItem {
   description: string;
   customization_label: string;
   quantity: string;
+  redeemed_quantity?: string;
+  redeem_status?: "UNUSED" | "PARTIALLY_REDEEMED" | "REDEEMED" | string;
   unit_price: string;
   discount_amount: string;
   tax_amount: string;
@@ -117,10 +121,14 @@ export interface InvoicePayment {
 export interface InvoiceResponse {
   id: number;
   number: string;                    // "INV-9-000001"
-  type_id: "SALE" | "REFUND";        // currently "SALE" in your examples
+  type_id: "SALE" | "REFUND" | "PREPAID";
+  prepaid_number?: string | null;
+  prepaid_redeem_status?: "UNUSED" | "PARTIALLY_REDEEMED" | "REDEEMED" | string;
+  last_redeemed_at?: string | null;
   status: "PAID" | "DRAFT" | "VOID" | string;
   coupon_code?: string;
   coupon_codes?: string[];
+  coupon_names?: string[];
   location: number;
   location_name: string;
   customer: number | null;

@@ -3,6 +3,7 @@
 import React from "react";
 import type { InvoiceResponse } from "../types/invoice";
 import { formatMoney } from "../helpers/posHelpers";
+import { getInvoiceCouponNames } from "../helpers/couponDisplay";
 
 interface OrderDetailModalProps {
   isOpen: boolean;
@@ -32,7 +33,7 @@ export const OrderDetailModal: React.FC<OrderDetailModalProps> = ({
   });
 
   const parentLines = invoice.items.filter((ln) => ln.parent_line === null);
-  const couponCodes = (invoice.coupon_codes?.length ? invoice.coupon_codes : invoice.coupon_code ? [invoice.coupon_code] : []).filter(Boolean);
+  const couponNames = getInvoiceCouponNames(invoice);
 
   return (
     <div className="fixed inset-0 z-40 flex items-center justify-center bg-kk-border-strong/60">
@@ -113,9 +114,9 @@ export const OrderDetailModal: React.FC<OrderDetailModalProps> = ({
                     <span>Discount</span>
                     <span>-{formatMoney(invoice.discount_total)}</span>
                   </div>
-                  {couponCodes.length > 0 && (
+                  {couponNames.length > 0 && (
                     <div className="text-[10px] text-kk-sec-text">
-                      Code{couponCodes.length > 1 ? "s" : ""}: {couponCodes.join(", ")}
+                      Coupon{couponNames.length > 1 ? "s" : ""}: {couponNames.join(", ")}
                     </div>
                   )}
                 </>

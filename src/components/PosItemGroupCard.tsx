@@ -50,7 +50,7 @@ export const PosItemGroupCard: React.FC<PosItemGroupCardProps> = ({
       <div className={`mb-2 flex h-28 w-full items-center justify-center rounded-lg ${hasImage ? "bg-kk-sec-bg" : "bg-transparent"} text-[11px] text-kk-ter-text overflow-hidden`}>
         {hasImage ? (
           <img
-            src={imageSrc}
+            src={imageSrc || undefined}
             alt={groupName}
             loading="lazy"
             className="h-full w-full object-cover"

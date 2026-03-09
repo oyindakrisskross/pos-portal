@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
-import { ScanLine } from "lucide-react";
+import { flushSync } from "react-dom";
+import { LoaderCircle, ScanLine } from "lucide-react";
 
 type Props = {
   isOpen: boolean;
@@ -23,14 +24,20 @@ export const ScanCodeModal: React.FC<Props> = ({
   const lastKeyAtRef = useRef<number>(0);
   const scanModeRef = useRef<boolean>(false);
   const idleSubmitTimerRef = useRef<number | null>(null);
+  const busyRef = useRef<boolean>(false);
+  const scanDetectedRef = useRef<boolean>(false);
 
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [scanDetected, setScanDetected] = useState(false);
 
   const handleSubmit = async (raw: string) => {
     const text = String(raw || "").trim();
     if (!text) return;
+    busyRef.current = true;
     setBusy(true);
+    scanDetectedRef.current = true;
+    setScanDetected(true);
     setError(null);
     try {
       const res = await onCode(text);
@@ -42,14 +49,20 @@ export const ScanCodeModal: React.FC<Props> = ({
     } catch (e: any) {
       setError(e?.message || "Unable to apply code.");
     } finally {
+      busyRef.current = false;
       setBusy(false);
+      scanDetectedRef.current = false;
+      setScanDetected(false);
     }
   };
 
   useEffect(() => {
     if (!isOpen) {
       setError(null);
+      busyRef.current = false;
       setBusy(false);
+      scanDetectedRef.current = false;
+      setScanDetected(false);
       bufferRef.current = "";
       scanModeRef.current = false;
       lastKeyAtRef.current = 0;
@@ -61,7 +74,10 @@ export const ScanCodeModal: React.FC<Props> = ({
     }
 
     setError(null);
+    busyRef.current = false;
     setBusy(false);
+    scanDetectedRef.current = false;
+    setScanDetected(false);
     bufferRef.current = "";
     scanModeRef.current = false;
     lastKeyAtRef.current = 0;
@@ -87,18 +103,26 @@ export const ScanCodeModal: React.FC<Props> = ({
     };
 
     const onKeyDown = (e: KeyboardEvent) => {
-      if (!isOpen || busy) return;
+      if (!isOpen || busyRef.current) return;
 
       // Keep capturing even if the user clicks elsewhere.
       focusHiddenInput();
 
       if (e.key === "Escape") {
         e.preventDefault();
+        scanDetectedRef.current = false;
+        setScanDetected(false);
         onClose();
         return;
       }
 
       if (e.ctrlKey || e.metaKey || e.altKey) return;
+
+      const isScannerKey = e.key.length === 1 || e.key === "Enter" || e.key === "Backspace";
+      if (isScannerKey && !scanDetectedRef.current) {
+        scanDetectedRef.current = true;
+        flushSync(() => setScanDetected(true));
+      }
 
       const now = Date.now();
       const delta = lastKeyAtRef.current ? now - lastKeyAtRef.current : 0;
@@ -180,6 +204,15 @@ export const ScanCodeModal: React.FC<Props> = ({
           />
 
           <ScanLine className="w-25 h-25" />
+
+          {scanDetected || busy ? (
+            <div className="mt-3 inline-flex items-center gap-2 rounded-md border border-kk-border-strong bg-white/70 px-3 py-2 text-xs font-medium text-black">
+              <LoaderCircle className="h-4 w-4 animate-spin" />
+              <span>{busy ? "Processing scanned code..." : "Reading scanned code..."}</span>
+            </div>
+          ) : (
+            <p className="mt-3 text-xs text-black/60">Waiting for scan...</p>
+          )}
 
           {error && (
             <div className="mt-3 rounded-md border border-red-300 bg-red-50 px-3 py-2 text-xs text-red-700">

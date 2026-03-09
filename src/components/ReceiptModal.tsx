@@ -2,11 +2,13 @@
 
 import React from "react";
 import { formatMoney } from "../helpers/posHelpers";
+import { getInvoiceCouponNames } from "../helpers/couponDisplay";
 import type { InvoiceResponse } from "../types/invoice";
 
 interface ReceiptModalProps {
   isOpen: boolean;
   invoice: InvoiceResponse | null;
+  appliedCouponNames?: string[];
   onClose: () => void;
   onPrint?: () => void;
 }
@@ -14,6 +16,7 @@ interface ReceiptModalProps {
 export const ReceiptModal: React.FC<ReceiptModalProps> = ({
   isOpen,
   invoice,
+  appliedCouponNames = [],
   onClose,
   onPrint,
 }) => {
@@ -21,7 +24,7 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({
 
   const topLevelItems = invoice.items.filter((ln) => ln.parent_line === null);
   const payments = invoice.payments;
-  const couponCodes = (invoice.coupon_codes?.length ? invoice.coupon_codes : invoice.coupon_code ? [invoice.coupon_code] : []).filter(Boolean);
+  const couponNames = getInvoiceCouponNames(invoice, appliedCouponNames);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-kk-border-strong/60">
@@ -135,9 +138,9 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({
                   <span>Discount:</span>
                   <span>-{formatMoney(invoice.discount_total)}</span>
                 </div>
-                {couponCodes.length > 0 && (
+                {couponNames.length > 0 && (
                   <div className="text-[10px] text-kk-sec-text">
-                    Code{couponCodes.length > 1 ? "s" : ""}: {couponCodes.join(", ")}
+                    Coupon{couponNames.length > 1 ? "s" : ""}: {couponNames.join(", ")}
                   </div>
                 )}
               </>

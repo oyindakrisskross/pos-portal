@@ -24,6 +24,47 @@ export interface BuildCheckoutContext {
   couponCodes?: string[];
 }
 
+const round2 = (value: number): number => Math.round(value * 100) / 100;
+const toNumber = (value: unknown): number => Number(value ?? 0) || 0;
+
+export function splitSubscriptionSaleLines(cart: CartLine[]) {
+  return {
+    subscriptionLines: cart.filter((line) => Boolean(line.subscriptionSale)),
+    standardLines: cart.filter((line) => !line.subscriptionSale),
+  };
+}
+
+export function computeSubscriptionSaleSummary(lines: CartLine[]): CartPricingSummary {
+  let subtotal = 0;
+  let taxTotal = 0;
+  let discountTotal = 0;
+
+  for (const line of lines) {
+    if (!line.subscriptionSale) continue;
+    const qty = Math.max(0, toNumber(line.quantity));
+    if (qty <= 0) continue;
+
+    const unitSubtotal = toNumber(line.item.price);
+    const lineSubtotal = unitSubtotal * qty;
+    const taxRate = toNumber(line.subscriptionSale.salesTaxRate);
+    const lineTax = lineSubtotal * (taxRate / 100);
+
+    subtotal += lineSubtotal;
+    taxTotal += lineTax;
+  }
+
+  subtotal = round2(subtotal);
+  taxTotal = round2(taxTotal);
+  discountTotal = round2(discountTotal);
+
+  return {
+    subtotal,
+    taxTotal,
+    discountTotal,
+    grandTotal: round2(subtotal + taxTotal - discountTotal),
+  };
+}
+
 function resolveCustomizationUnitPrice(def: ItemCustomization): string {
   const delta = parseFloat(def.price_delta || "0") || 0;
   if (!delta) return "0";
@@ -55,6 +96,7 @@ export function buildInvoiceItemsFromCart(cart: CartLine[]): InvoiceItemInput[] 
   const items: InvoiceItemInput[] = [];
 
   for (const line of cart) {
+    if (line.subscriptionSale) continue;
     const base: InvoiceItemInput = {
       item: line.item.id,
       quantity: String(line.quantity),
@@ -105,6 +147,7 @@ export function buildPriceCartItemsFromCart(cart: CartLine[]): PriceCartItemInpu
 
   for (let parentIdx = 0; parentIdx < cart.length; parentIdx++) {
     const line = cart[parentIdx];
+    if (line.subscriptionSale) continue;
     // parent line
     items.push({
       item: line.item.id,

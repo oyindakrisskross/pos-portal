@@ -2,11 +2,13 @@
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { PosScreen } from "../PosScreen";
+import { SubscriptionsScreen } from "../SubscriptionsScreen";
 import type { 
   AddToCartPayload, 
   CartLine, 
   CartPricingSummary, 
   HeldOrderSummary, 
+  POSItem,
 } from "../../types/catalog";
 import { CartPane } from "../../components/CartPane";
 import {
@@ -16,20 +18,29 @@ import {
   fetchHeldOrders,
   fetchPriceCart,
   loadHeldOrder,
+  lookupPrepaidInvoice,
+  lookupSubscriptionPass,
+  resolvePOSQR,
+  redeemSubscriptionPass,
+  type POSQRKind,
+  type POSQRResolveResponse,
+  redeemPrepaidInvoice,
   updateHoldCart,
 } from "../../api/cart";
 import { HeldOrdersModal } from "../../components/HeldOrdersModal";
 import { HoldOrderNameModal } from "../../components/HoldOrderNameModal";
 import { fetchPOSItem } from "../../api/catalog";
 import { OrdersScreen } from "../OrdersScreen";
-import { Ellipsis, LogOut, ReceiptText, Store, StretchVertical } from "lucide-react";
+import { Ellipsis, LogOut, ReceiptText, Store, StretchVertical, TicketPercent } from "lucide-react";
 import { SidebarItem } from "../../components/SideBarItem";
 import { useAuth } from "../../auth/AuthContext";
 import type { AppliedCoupon } from "../../types/invoice";
 import { parseDecimal } from "../../helpers/posHelpers";
+import { computeSubscriptionSaleSummary, splitSubscriptionSaleLines } from "../../helpers/invoiceHelpers";
 import { fetchOutlets } from "../../api/auth";
 import { CouponDecisionModal } from "../../components/CouponDecisionModal";
-import { consumeSubscriptionEntryPass } from "../../api/entryPass";
+import { consumeWalletTicket } from "../../api/entryPass";
+import type { POSSubscriptionPlan, POSSubscriptionProduct } from "../../types/subscriptions";
 
 
 function makeLineId(counter: number) {
@@ -37,7 +48,72 @@ function makeLineId(counter: number) {
   return `${Date.now()}-${counter}`;
 }
 
-type ViewKey = "POS" | "ORDERS" | "HOLD";
+type ViewKey = "POS" | "SUBSCRIPTIONS" | "ORDERS" | "HOLD";
+
+function buildRedeemStubItem(itemId: number, itemName?: string, itemSku?: string): POSItem {
+  const fallbackName = `Item #${itemId}`;
+  return {
+    id: itemId,
+    sku: String(itemSku || `ITEM-${itemId}`),
+    name: String(itemName || fallbackName),
+    description: null,
+    type_id: "SERVICE",
+    sellable: true,
+    group: null,
+    unit: null,
+    price: "0.00",
+    sale_tax: null,
+    sale_tax_rate: null,
+    inventory_tracking: false,
+    returnable: false,
+    scheduled: false,
+    stock_qty: "0",
+    primary_image: null,
+    group_primary_image: null,
+    customized: false,
+    variant_key: null,
+    customizations: [],
+  };
+}
+
+function buildSubscriptionSaleStubItem(
+  planId: number,
+  productName: string,
+  planName: string,
+  planCode: string,
+  linePrice: string
+): POSItem {
+  return {
+    id: -Math.abs(planId),
+    sku: `SUB-PLAN-${planCode || planId}`,
+    name: `${productName} - ${planName}`,
+    description: `Subscription plan ${planCode || planId}`,
+    type_id: "SERVICE",
+    sellable: true,
+    group: null,
+    unit: null,
+    price: linePrice,
+    sale_tax: null,
+    sale_tax_rate: null,
+    inventory_tracking: false,
+    returnable: false,
+    scheduled: false,
+    stock_qty: "0",
+    primary_image: null,
+    group_primary_image: null,
+    customized: false,
+    variant_key: null,
+    customizations: [],
+  };
+}
+
+type AssignedCustomer = {
+  portalCustomerId: number;
+  contactId: number;
+  name: string;
+  email?: string | null;
+  phone?: string | null;
+};
 
 interface Props {
   locationId: number;
@@ -54,10 +130,25 @@ export const PosApp: React.FC<Props> = ({
   const [pricing, setPricing] = useState<CartPricingSummary | null>(null);
   const [appliedCoupons, setAppliedCoupons] = useState<AppliedCoupon[]>([]);
   const [manualCouponCodes, setManualCouponCodes] = useState<string[]>([]);
+  const [assignedCustomer, setAssignedCustomer] = useState<AssignedCustomer | null>(null);
   const [scanDecision, setScanDecision] = useState<{
     scannedCode: string;
     scannedName: string;
     combineAvailable: boolean;
+  } | null>(null);
+  const [prepaidSession, setPrepaidSession] = useState<{
+    invoiceId: number;
+    invoiceNumber: string;
+    prepaidNumber: string;
+    availableQty: number;
+  } | null>(null);
+  const [subscriptionSession, setSubscriptionSession] = useState<{
+    token: string;
+    subscriptionId: number;
+    planName: string;
+    customerName: string;
+    totalUses: number | null;
+    usedUses: number;
   } | null>(null);
   const [lineDiscounts, setLineDiscounts] = useState<Record<string, number>>({});
   const [heldOpen, setHeldOpen] = useState(false);
@@ -107,23 +198,76 @@ export const PosApp: React.FC<Props> = ({
     };
   }, []);
 
+  const apiErrorMessage = (err: any, fallback: string) => {
+    const data = err?.response?.data;
+    if (typeof data === "string" && data.trim()) return data;
+    if (data?.detail) return String(data.detail);
+    if (data?.message) return String(data.message);
+    if (Array.isArray(data?.non_field_errors) && data.non_field_errors[0]) {
+      return String(data.non_field_errors[0]);
+    }
+    return err?.message || fallback;
+  };
+
+  const resolveScannedQR = async (
+    raw: string
+  ): Promise<{ ok: true; data: POSQRResolveResponse } | { ok: false; error: string }> => {
+    const text = String(raw || "").trim();
+    if (!text) {
+      return { ok: false, error: "No code detected." };
+    }
+
+    try {
+      const data = await resolvePOSQR(text, locationId);
+      return { ok: true, data };
+    } catch (err: any) {
+      return { ok: false, error: apiErrorMessage(err, "Unable to resolve QR code.") };
+    }
+  };
+
+  const kindRouteMessage = (kind: POSQRKind, target: "discount" | "customer" | "redeem") => {
+    if (target === "discount") {
+      if (kind === "CUSTOMER") return "This is a customer QR. Use Assign Customer.";
+      if (kind === "PREPAID" || kind === "WALLET_TICKET") {
+        return "This is a redeemable QR. Use Redeem Items.";
+      }
+    }
+
+    if (target === "customer") {
+      if (kind === "COUPON") return "This is a coupon QR. Use Apply Discount.";
+      if (kind === "SUBSCRIPTION_PASS") return "This is a subscription QR. Use Apply Discount.";
+      if (kind === "PREPAID" || kind === "WALLET_TICKET") {
+        return "This is a redeemable QR. Use Redeem Items.";
+      }
+    }
+
+    if (target === "redeem") {
+      if (kind === "COUPON") return "This is a coupon QR. Use Apply Discount.";
+      if (kind === "CUSTOMER") return "This is a customer QR. Use Assign Customer.";
+    }
+
+    return "Unsupported QR type.";
+  };
+
   const buildPriceCartPayload = (cartLines: CartLine[]) => {
     const itemsPayload: any[] = [];
     const payloadToCartLine: string[] = [];
 
     for (let parentIdx = 0; parentIdx < cartLines.length; parentIdx++) {
       const line = cartLines[parentIdx];
+      if (line.subscriptionSale) continue;
       const parent = line.item;
+      const parentUnitPrice = line.prepaid ? "0.00" : parent.price;
       itemsPayload.push({
         item: parent.id,
         quantity: line.quantity,
-        unit_price: parent.price,
+        unit_price: parentUnitPrice,
         parent_idx: parentIdx,
         is_child: false,
       });
       payloadToCartLine.push(line.id);
 
-      if (line.customizations?.length && parent.customizations?.length) {
+      if (!line.prepaid && line.customizations?.length && parent.customizations?.length) {
         const metaById = new Map(parent.customizations.map((c) => [c.id, c]));
 
         for (const sel of line.customizations) {
@@ -234,6 +378,11 @@ export const PosApp: React.FC<Props> = ({
 
   const handleAddToCart = (payload: AddToCartPayload) => {
     setCart((prev) => {
+      if (prepaidSession || subscriptionSession) {
+        showToast("Finish or clear the current redemption session before adding regular items.");
+        return prev;
+      }
+
       if (payload.item.inventory_tracking) {
         const stockQty = parseDecimal(payload.item.stock_qty, 0);
         if (stockQty <= 0) {
@@ -256,6 +405,7 @@ export const PosApp: React.FC<Props> = ({
 
       const existingIndex = prev.findIndex(
         (line) =>
+          !line.prepaid &&
           line.item.id === payload.item.id &&
           line.customizations.length === payload.customizations.length &&
           line.customizations.every(
@@ -281,6 +431,69 @@ export const PosApp: React.FC<Props> = ({
           : line
       );
     });
+  };
+
+  const handleAddSubscriptionPlanToCart = (
+    plan: POSSubscriptionPlan,
+    product: POSSubscriptionProduct,
+    quantity: number
+  ) => {
+    if (prepaidSession || subscriptionSession) {
+      showToast("Finish or clear the current redemption session before selling subscriptions.");
+      return;
+    }
+
+    const unitPrice = parseDecimal(plan.price, 0) + parseDecimal(plan.setup_fee ?? "0", 0);
+    const linePrice = unitPrice.toFixed(2);
+    const safeQty = Math.max(1, Math.floor(Number(quantity || 1)));
+
+    setCart((prev) => {
+      if (prev.some((line) => Boolean(line.prepaid))) {
+        showToast("Redeemable carts cannot be mixed with subscription sales.");
+        return prev;
+      }
+
+      const existingIndex = prev.findIndex(
+        (line) => line.subscriptionSale?.planId === plan.id && !line.prepaid
+      );
+
+      if (existingIndex >= 0) {
+        return prev.map((line, idx) =>
+          idx === existingIndex ? { ...line, quantity: line.quantity + safeQty } : line
+        );
+      }
+
+      const stubItem = buildSubscriptionSaleStubItem(
+        plan.id,
+        String(product.name || "Subscription"),
+        String(plan.name || "Plan"),
+        String(plan.code || plan.id),
+        linePrice
+      );
+
+      const nextLine: CartLine = {
+        id: makeLineId(prev.length),
+        item: stubItem,
+        quantity: safeQty,
+        customizations: [],
+        subscriptionSale: {
+          planId: plan.id,
+          planCode: String(plan.code || ""),
+          planName: String(plan.name || "Plan"),
+          productId: Number(plan.product || product.id),
+          productName: String(plan.product_name || product.name || "Subscription"),
+          planType: plan.plan_type,
+          billingFrequencyValue: Number(plan.billing_frequency_value || 1),
+          billingFrequencyUnit: plan.billing_frequency_unit,
+          setupFee: String(plan.setup_fee ?? "0.00"),
+          salesTaxRate: plan.sales_tax_rate ?? null,
+        },
+      };
+
+      return [...prev, nextLine];
+    });
+
+    showToast(`Added subscription plan: ${plan.name}`);
   };
 
   const handleReplaceCart = (lines: AddToCartPayload[]) => {
@@ -393,6 +606,15 @@ export const PosApp: React.FC<Props> = ({
             return { ...line, quantity: Math.max(0, line.quantity + delta) };
           }
 
+          if (line.prepaid) {
+            const maxQty = Number(line.prepaidMaxQty ?? line.quantity ?? 0);
+            const nextQty = line.quantity + delta;
+            if (nextQty > maxQty) {
+              showToast(`Maximum redeemable quantity for "${line.item.name}" is ${maxQty}.`);
+              return line;
+            }
+          }
+
           if (line.item.inventory_tracking) {
             const stockQty = parseDecimal(line.item.stock_qty, 0);
             if (stockQty <= 0) {
@@ -428,7 +650,10 @@ export const PosApp: React.FC<Props> = ({
     setPromoLines([]);
     setManualCouponCodes([]);
     setAppliedCoupons([]);
+    setAssignedCustomer(null);
     setScanDecision(null);
+    setPrepaidSession(null);
+    setSubscriptionSession(null);
   };
 
   const buildHoldItemsPayload = useCallback((cartLines: CartLine[]) => {
@@ -530,61 +755,19 @@ export const PosApp: React.FC<Props> = ({
 
   const handleHoldOrder = async () => {
     if (cart.length === 0 || holding) return;
+    if (cart.some((ln) => Boolean(ln.prepaid))) {
+      showToast("Pre-paid redemption carts cannot be held.");
+      return;
+    }
+    if (cart.some((ln) => Boolean(ln.subscriptionSale))) {
+      showToast("Subscription checkout carts cannot be held.");
+      return;
+    }
     if (activeHeldOrder) {
       await saveExistingHeldOrder();
       return;
     }
     setHoldNameOpen(true);
-  };
-
-  const handleAfterPaymentCompleted = useCallback(() => {
-    const current = activeHeldOrder;
-    if (!current) return;
-
-    (async () => {
-      try {
-        await completeHeldOrder(current.id);
-      } catch (err: any) {
-        showToast(err?.response?.data?.detail || "Failed to complete held order.");
-      } finally {
-        setActiveHeldOrder(null);
-      }
-    })();
-  }, [activeHeldOrder, showToast]);
-
-
-  const parseScannedCouponCode = (raw: string): { code?: string; error?: string } => {
-    const trimmed = String(raw || "").trim();
-    if (!trimmed) return { error: "No code detected." };
-
-    const prefixed = trimmed.match(/^([A-Z_]{2,20}):(.*)$/);
-    if (prefixed) {
-      const prefix = prefixed[1];
-      const rest = (prefixed[2] || "").trim();
-      if (prefix !== "COUPON") return { error: `Unsupported QR type: ${prefix}` };
-      if (!rest) return { error: "Coupon code is missing." };
-      return { code: rest };
-    }
-
-    return { code: trimmed };
-  };
-
-  const parseScannedEntryPassToken = (raw: string): { token?: string; error?: string } => {
-    const trimmed = String(raw || "").trim();
-    if (!trimmed) return { error: "No token detected." };
-
-    const prefixed = trimmed.match(/^([A-Z_]{2,30}):(.*)$/);
-    if (prefixed) {
-      const prefix = prefixed[1];
-      const rest = (prefixed[2] || "").trim();
-      if (prefix !== "SUBSCRIPTION" && prefix !== "ENTRY_PASS") {
-        return { error: `Unsupported QR type: ${prefix}` };
-      }
-      if (!rest) return { error: "Pass token is missing." };
-      return { token: rest };
-    }
-
-    return { token: trimmed };
   };
 
   const getCouponDisplayName = (coupon: any, fallbackLabel = "Coupon"): string => {
@@ -593,9 +776,203 @@ export const PosApp: React.FC<Props> = ({
     return display || fallbackLabel;
   };
 
+  const loadPrepaidFromCode = async (
+    rawCode: string
+  ): Promise<{ ok: boolean; error?: string }> => {
+    const normalized = String(rawCode || "").trim().toUpperCase();
+    if (!normalized.startsWith("PPP-")) {
+      return { ok: false, error: "Invalid pre-paid code format." };
+    }
+
+    try {
+      const data = await lookupPrepaidInvoice(normalized, locationId);
+      if (subscriptionSession) {
+        return {
+          ok: false,
+          error: "Finish or clear the current subscription redemption before loading a pre-paid invoice.",
+        };
+      }
+      if (prepaidSession && Number(prepaidSession.invoiceId) !== Number(data.invoice_id)) {
+        return {
+          ok: false,
+          error: `Finish or clear ${prepaidSession.prepaidNumber} before loading another pre-paid invoice.`,
+        };
+      }
+      const sourceLines = Array.isArray(data?.lines) ? data.lines : [];
+
+      const loaded = sourceLines.map((ln, idx) => {
+        const qty = Number(ln?.remaining_quantity ?? 0);
+        if (!Number.isFinite(qty) || qty <= 0) return null;
+
+        const itemId = Number(ln.item_id);
+        return {
+          id: `prepaid-${ln.line_id}-${idx}`,
+          item: buildRedeemStubItem(itemId, ln.item_name, ln.item_sku),
+          quantity: qty,
+          customizations: [],
+          prepaid: true,
+          redeemSource: "PREPAID",
+          prepaidInvoiceId: Number(data.invoice_id),
+          prepaidNumber: String(data.prepaid_number || normalized),
+          prepaidInvoiceLineId: Number(ln.line_id),
+          prepaidMaxQty: qty,
+        } as CartLine;
+      });
+
+      const nextCart = loaded.filter(Boolean) as CartLine[];
+      if (!nextCart.length) {
+        return { ok: false, error: "This pre-paid invoice has no redeemable items remaining." };
+      }
+
+      setCart((prev) => {
+        const saleLines = prev.filter((ln) => !ln.prepaid);
+        return [...saleLines, ...nextCart];
+      });
+      setPromoLines([]);
+      setManualCouponCodes([]);
+      setAppliedCoupons([]);
+      setLineDiscounts({});
+      setScanDecision(null);
+      setSubscriptionSession(null);
+      setPrepaidSession({
+        invoiceId: Number(data.invoice_id),
+        invoiceNumber: String(data.invoice_number || ""),
+        prepaidNumber: String(data.prepaid_number || normalized),
+        availableQty: nextCart.reduce((sum, ln) => sum + Number(ln.prepaidMaxQty ?? ln.quantity ?? 0), 0),
+      });
+      showToast(`Loaded ${data.prepaid_number || normalized} for redemption.`);
+      return { ok: true };
+    } catch (e: any) {
+      const detail = String(e?.response?.data?.detail || e?.message || "Unable to load pre-paid invoice.");
+      return { ok: false, error: detail };
+    }
+  };
+
+  const redeemPrepaidFromCart = async (): Promise<{ ok: boolean; error?: string }> => {
+    if (!prepaidSession) {
+      return { ok: false, error: "No pre-paid invoice loaded." };
+    }
+
+    const selected = cart
+      .filter((ln) => Boolean(ln.prepaidInvoiceLineId) && Number(ln.quantity) > 0)
+      .map((ln) => ({
+        line_id: Number(ln.prepaidInvoiceLineId),
+        quantity: String(ln.quantity),
+      }));
+
+    if (!selected.length) {
+      return { ok: false, error: "No redeemable items selected." };
+    }
+
+    try {
+      const data = await redeemPrepaidInvoice({
+        invoice_id: prepaidSession.invoiceId,
+        lines: selected,
+      });
+      showToast(String(data?.detail || "Pre-paid invoice redeemed."));
+      handleClearCart();
+      return { ok: true };
+    } catch (e: any) {
+      const detail = String(e?.response?.data?.detail || e?.message || "Unable to redeem pre-paid invoice.");
+      return { ok: false, error: detail };
+    }
+  };
+
+  const redeemSubscriptionFromCart = async (): Promise<{ ok: boolean; error?: string }> => {
+    if (!subscriptionSession) {
+      return { ok: false, error: "No subscription redemption loaded." };
+    }
+
+    const selected = cart
+      .filter(
+        (ln) =>
+          ln.redeemSource === "SUBSCRIPTION" &&
+          ln.subscriptionToken === subscriptionSession.token &&
+          Boolean(ln.subscriptionPlanItemId) &&
+          Number(ln.quantity) > 0
+      )
+      .map((ln) => ({
+        plan_item_id: Number(ln.subscriptionPlanItemId),
+        quantity: String(ln.quantity),
+      }));
+
+    if (!selected.length) {
+      return { ok: false, error: "No redeemable subscription items selected." };
+    }
+
+    try {
+      const data = await redeemSubscriptionPass({
+        token: subscriptionSession.token,
+        location_id: locationId,
+        pos_reference: `POS-SUB-${Date.now()}`,
+        lines: selected,
+      });
+      const used = Number(data?.used_uses ?? 0);
+      const total =
+        data?.total_uses === null || data?.total_uses === undefined
+          ? null
+          : Number(data.total_uses);
+      const detail = String(data?.detail || "").trim();
+
+      if (detail) {
+        showToast(detail);
+      } else if (total !== null && Number.isFinite(total) && total > 0) {
+        showToast(`Subscription items redeemed (${used}/${total} used).`);
+      } else {
+        showToast("Subscription items redeemed.");
+      }
+
+      handleClearCart();
+      return { ok: true };
+    } catch (e: any) {
+      const detail = String(e?.response?.data?.detail || e?.message || "Unable to redeem subscription items.");
+      return { ok: false, error: detail };
+    }
+  };
+
+  const redeemLoadedItemsFromCart = async (): Promise<{ ok: boolean; error?: string }> => {
+    if (prepaidSession) {
+      return redeemPrepaidFromCart();
+    }
+    if (subscriptionSession) {
+      return redeemSubscriptionFromCart();
+    }
+    return { ok: false, error: "No redeemable items loaded." };
+  };
+
+  const handleAfterPaymentCompleted = async (_invoice: any = null) => {
+    const hasRedeemableItems = cart.some(
+      (ln) => Boolean(ln.prepaid) && Number(ln.quantity || 0) > 0
+    );
+    if (hasRedeemableItems) {
+      const redeem = await redeemLoadedItemsFromCart();
+      if (!redeem.ok) {
+        showToast(redeem.error || "Unable to redeem items.");
+      }
+    }
+
+    const current = activeHeldOrder;
+    if (!current) return;
+
+    try {
+      await completeHeldOrder(current.id);
+    } catch (err: any) {
+      showToast(err?.response?.data?.detail || "Failed to complete held order.");
+    } finally {
+      setActiveHeldOrder(null);
+    }
+  };
+
   const previewCouponCodes = async (
     couponCodes: string[]
   ): Promise<{ ok: boolean; data?: any; error?: string; reason?: string }> => {
+    if (cart.some((ln) => Boolean(ln.subscriptionSale))) {
+      return { ok: false, error: "Coupons cannot be applied to subscription checkout carts." };
+    }
+    if (prepaidSession || subscriptionSession) {
+      return { ok: false, error: "Coupons cannot be applied while redeemable items are in the cart." };
+    }
+
     const normalizedCodes = Array.from(
       new Set(couponCodes.map((c) => String(c || "").trim()).filter(Boolean))
     );
@@ -624,6 +1001,13 @@ export const PosApp: React.FC<Props> = ({
   const applyCouponCodes = async (
     couponCodes: string[]
   ): Promise<{ ok: boolean; error?: string }> => {
+    if (cart.some((ln) => Boolean(ln.subscriptionSale))) {
+      return { ok: false, error: "Coupons cannot be applied to subscription checkout carts." };
+    }
+    if (prepaidSession || subscriptionSession) {
+      return { ok: false, error: "Coupons cannot be applied while redeemable items are in the cart." };
+    }
+
     const normalizedCodes = Array.from(
       new Set(couponCodes.map((c) => String(c || "").trim()).filter(Boolean))
     );
@@ -641,9 +1025,93 @@ export const PosApp: React.FC<Props> = ({
   const applyDiscountFromRaw = async (
     raw: string
   ): Promise<{ ok: boolean; error?: string }> => {
-    const parsed = parseScannedCouponCode(raw);
-    if (parsed.error) return { ok: false, error: parsed.error };
-    const couponCode = parsed.code!;
+    const resolved = await resolveScannedQR(raw);
+    if (!resolved.ok) return { ok: false, error: resolved.error };
+
+    if (cart.some((ln) => Boolean(ln.subscriptionSale))) {
+      return { ok: false, error: "Coupons cannot be applied to subscription checkout carts." };
+    }
+
+    if (prepaidSession || subscriptionSession) {
+      return { ok: false, error: "Finish redeeming or clear redeemable items before scanning coupons." };
+    }
+
+    if (resolved.data.kind === "SUBSCRIPTION_PASS") {
+      const subscription = resolved.data.subscription;
+      if (!subscription) {
+        return { ok: false, error: "Subscription details could not be resolved from this QR code." };
+      }
+      if (String(subscription.status || "").trim().toUpperCase() !== "ACTIVE") {
+        return { ok: false, error: "Subscription is not active." };
+      }
+
+      const assigned = attachCustomerToCart(subscription.customer, false);
+      if (!assigned.ok) return { ok: false, error: assigned.error };
+
+      const candidateCodes = Array.from(
+        new Set(
+          (Array.isArray(subscription.coupons) ? subscription.coupons : [])
+            .map((row) => String(row?.code || "").trim())
+            .filter(Boolean)
+        )
+      );
+      if (!candidateCodes.length) {
+        return { ok: false, error: "No subscription coupons are attached to this plan." };
+      }
+
+      if (candidateCodes.length === 1) {
+        const applyOne = await applyCouponCodes([candidateCodes[0]]);
+        if (!applyOne.ok) {
+          return { ok: false, error: applyOne.error || "No eligible subscription coupons match the current cart." };
+        }
+        showToast(`Assigned customer: ${assigned.customer?.name || "Customer"}`);
+        return { ok: true };
+      }
+
+      const applyAll = await applyCouponCodes(candidateCodes);
+      if (!applyAll.ok) {
+        const previewResults = await Promise.all(
+          candidateCodes.map(async (code) => ({
+            code,
+            preview: await previewCouponCodes([code]),
+          }))
+        );
+        const eligibleCodes = previewResults
+          .filter((row) => row.preview.ok)
+          .map((row) => row.code);
+
+        if (!eligibleCodes.length) {
+          return { ok: false, error: "No eligible subscription coupons match the current cart." };
+        }
+
+        const applyEligible = await applyCouponCodes(eligibleCodes);
+        if (!applyEligible.ok) {
+          const fallback = await applyCouponCodes([eligibleCodes[0]]);
+          if (!fallback.ok) {
+            return {
+              ok: false,
+              error:
+                fallback.error ||
+                applyEligible.error ||
+                applyAll.error ||
+                "Unable to apply subscription coupon.",
+            };
+          }
+        }
+      }
+
+      showToast(`Assigned customer: ${assigned.customer?.name || "Customer"}`);
+      return { ok: true };
+    }
+
+    if (resolved.data.kind !== "COUPON") {
+      return { ok: false, error: kindRouteMessage(resolved.data.kind, "discount") };
+    }
+
+    const couponCode = String(resolved.data.coupon?.code || "").trim();
+    if (!couponCode) {
+      return { ok: false, error: "Coupon code is missing." };
+    }
 
     const overridePreview = await previewCouponCodes([couponCode]);
     if (!overridePreview.ok) {
@@ -662,7 +1130,8 @@ export const PosApp: React.FC<Props> = ({
         (c: any) =>
           String(c?.code || "").trim().toLowerCase() === couponCode.toLowerCase()
       ) ?? overrideCoupons[0];
-    const scannedName = getCouponDisplayName(scannedCoupon, "Coupon");
+    const scannedName =
+      String(resolved.data.coupon?.name || "").trim() || getCouponDisplayName(scannedCoupon, "Coupon");
 
     const currentCodes = appliedCoupons.map((c) => c.code).filter(Boolean);
     if (!currentCodes.length) {
@@ -675,37 +1144,167 @@ export const PosApp: React.FC<Props> = ({
     return { ok: true };
   };
 
-  const redeemEntryPassFromRaw = async (
+  const attachCustomerToCart = (
+    scannedCustomer: any,
+    announce = true
+  ): { ok: boolean; error?: string; customer?: AssignedCustomer } => {
+    const contactId = Number(scannedCustomer?.contact_id ?? 0);
+    if (!Number.isFinite(contactId) || contactId <= 0) {
+      return { ok: false, error: "This customer does not have a linked contact record." };
+    }
+
+    const nextAssigned: AssignedCustomer = {
+      portalCustomerId: Number(scannedCustomer?.portal_customer_id ?? 0),
+      contactId,
+      name: String(scannedCustomer?.name || "Customer"),
+      email: scannedCustomer?.email ?? null,
+      phone: scannedCustomer?.phone ?? null,
+    };
+    setAssignedCustomer(nextAssigned);
+    if (announce) {
+      showToast(`Assigned customer: ${nextAssigned.name}`);
+    }
+    return { ok: true, customer: nextAssigned };
+  };
+
+  const assignCustomerFromRaw = async (
     raw: string
   ): Promise<{ ok: boolean; error?: string }> => {
-    const parsed = parseScannedEntryPassToken(raw);
-    if (parsed.error) return { ok: false, error: parsed.error };
+    const resolved = await resolveScannedQR(raw);
+    if (!resolved.ok) return { ok: false, error: resolved.error };
 
+    if (resolved.data.kind !== "CUSTOMER") {
+      return { ok: false, error: kindRouteMessage(resolved.data.kind, "customer") };
+    }
+
+    const attached = attachCustomerToCart(resolved.data.customer, true);
+    if (!attached.ok) return { ok: false, error: attached.error };
+    return { ok: true };
+  };
+
+  const loadSubscriptionFromToken = async (
+    token: string
+  ): Promise<{ ok: boolean; error?: string }> => {
     try {
-      const data = await consumeSubscriptionEntryPass({
-        qr_token: parsed.token!,
-        location_id: locationId,
-        pos_reference: `POS-PASS-${Date.now()}`,
-      });
-
-      const used = Number(data?.used_uses ?? 0);
-      const totalRaw = data?.total_uses;
-      const total =
-        totalRaw === null || totalRaw === undefined ? null : Number(totalRaw);
-
-      if (total !== null && Number.isFinite(total) && total > 0) {
-        showToast(`Free Entry Pass redeemed (${used}/${total} used).`);
-      } else {
-        showToast("Free Entry Pass redeemed.");
+      if (prepaidSession) {
+        return {
+          ok: false,
+          error: "Finish or clear the current pre-paid redemption before loading a subscription pass.",
+        };
+      }
+      const data = await lookupSubscriptionPass(token, locationId);
+      if (
+        subscriptionSession &&
+        Number(subscriptionSession.subscriptionId) !== Number(data.subscription_id)
+      ) {
+        return {
+          ok: false,
+          error: "Finish or clear the current subscription redemption before loading another pass.",
+        };
       }
 
+      const sourceLines = Array.isArray(data?.lines) ? data.lines : [];
+      const loaded = sourceLines.map((ln, idx) => {
+        const maxQtyRaw = Number(ln?.max_quantity ?? 0);
+        const maxQty = Number.isFinite(maxQtyRaw) ? Math.max(0, Math.floor(maxQtyRaw)) : 0;
+        if (maxQty <= 0) return null;
+
+        const itemId = Number(ln.item_id);
+        return {
+          id: `subscription-${ln.plan_item_id}-${idx}`,
+          item: buildRedeemStubItem(itemId, ln.item_name, ln.item_sku),
+          quantity: 1,
+          customizations: [],
+          prepaid: true,
+          redeemSource: "SUBSCRIPTION",
+          prepaidMaxQty: maxQty,
+          subscriptionToken: String(data.token || token),
+          subscriptionId: Number(data.subscription_id),
+          subscriptionPlanItemId: Number(ln.plan_item_id),
+        } as CartLine;
+      });
+
+      const nextCart = loaded.filter(Boolean) as CartLine[];
+      if (!nextCart.length) {
+        return { ok: false, error: "No redeemable items are currently eligible for this subscription." };
+      }
+
+      setCart((prev) => {
+        const saleLines = prev.filter((ln) => !ln.prepaid);
+        return [...saleLines, ...nextCart];
+      });
+      setPromoLines([]);
+      setManualCouponCodes([]);
+      setAppliedCoupons([]);
+      setLineDiscounts({});
+      setScanDecision(null);
+      setPrepaidSession(null);
+      setSubscriptionSession({
+        token: String(data.token || token),
+        subscriptionId: Number(data.subscription_id),
+        planName: String(data.plan_name || "Subscription"),
+        customerName: String(data.customer_name || "Customer"),
+        totalUses:
+          data.total_uses === null || data.total_uses === undefined
+            ? null
+            : Number(data.total_uses),
+        usedUses: Number(data.used_uses ?? 0),
+      });
+      showToast(`Loaded ${String(data.plan_name || "Subscription")} items for redemption.`);
+
       return { ok: true };
-    } catch (e: any) {
-      const detail = String(
-        e?.response?.data?.detail || e?.message || "Unable to redeem pass."
-      );
-      return { ok: false, error: detail };
+    } catch (err: any) {
+      return { ok: false, error: apiErrorMessage(err, "Unable to load subscription pass.") };
     }
+  };
+
+  const redeemWalletTicketFromToken = async (
+    token: string
+  ): Promise<{ ok: boolean; error?: string }> => {
+    try {
+      await consumeWalletTicket({
+        qr_token: token,
+        location_id: locationId,
+        pos_reference: `POS-WALLET-${Date.now()}`,
+      });
+      showToast("Wallet ticket redeemed.");
+      return { ok: true };
+    } catch (err: any) {
+      return { ok: false, error: apiErrorMessage(err, "Unable to redeem ticket.") };
+    }
+  };
+
+  const redeemItemsFromRaw = async (
+    raw: string
+  ): Promise<{ ok: boolean; error?: string }> => {
+    const resolved = await resolveScannedQR(raw);
+    if (!resolved.ok) return { ok: false, error: resolved.error };
+
+    if (resolved.data.kind === "PREPAID") {
+      const code = String(resolved.data.prepaid?.code || "").trim().toUpperCase();
+      if (!code) {
+        return { ok: false, error: "Pre-paid code is missing." };
+      }
+      return loadPrepaidFromCode(code);
+    }
+
+    if (resolved.data.kind === "SUBSCRIPTION_PASS") {
+      const token = String(resolved.data.redeem?.token || "").trim();
+      if (!token) {
+        return { ok: false, error: "Pass token is missing." };
+      }
+      return loadSubscriptionFromToken(token);
+    }
+
+    if (resolved.data.kind === "WALLET_TICKET") {
+      const token = String(resolved.data.redeem?.token || "").trim();
+      if (!token) {
+        return { ok: false, error: "Ticket token is missing." };
+      }
+      return redeemWalletTicketFromToken(token);
+    }
+
+    return { ok: false, error: kindRouteMessage(resolved.data.kind, "redeem") };
   };
 
   const handleOverrideScannedCoupon = async () => {
@@ -726,6 +1325,8 @@ export const PosApp: React.FC<Props> = ({
   };
 
   const handleRemoveDiscount = async () => {
+    if (cart.some((ln) => Boolean(ln.subscriptionSale))) return;
+    if (prepaidSession || subscriptionSession) return;
     if (!manualCouponCodes.length) return;
     setManualCouponCodes([]);
 
@@ -744,6 +1345,30 @@ export const PosApp: React.FC<Props> = ({
     }
   };
 
+  useEffect(() => {
+    if (!prepaidSession) return;
+    const hasPrepaidLines = cart.some(
+      (ln) =>
+        ln.redeemSource === "PREPAID" &&
+        Number(ln.prepaidInvoiceId) === Number(prepaidSession.invoiceId)
+    );
+    if (!hasPrepaidLines) {
+      setPrepaidSession(null);
+    }
+  }, [cart, prepaidSession]);
+
+  useEffect(() => {
+    if (!subscriptionSession) return;
+    const hasSubscriptionLines = cart.some(
+      (ln) =>
+        ln.redeemSource === "SUBSCRIPTION" &&
+        String(ln.subscriptionToken || "") === String(subscriptionSession.token)
+    );
+    if (!hasSubscriptionLines) {
+      setSubscriptionSession(null);
+    }
+  }, [cart, subscriptionSession]);
+
   // --- Call backend PriceCartView whenever cart changes ---
   useEffect(() => {
     let cancelled = false;
@@ -760,6 +1385,53 @@ export const PosApp: React.FC<Props> = ({
         setAppliedCoupons([]);
         setLineDiscounts({});
         setPromoLines([]);
+        return;
+      }
+
+      const { subscriptionLines, standardLines } = splitSubscriptionSaleLines(cart);
+      if (subscriptionLines.length) {
+        const subscriptionSummary = computeSubscriptionSaleSummary(subscriptionLines);
+        setAppliedCoupons([]);
+        if (manualCouponCodes.length) {
+          setManualCouponCodes([]);
+        }
+
+        if (!standardLines.length) {
+          if (cancelled) return;
+          setPricing(subscriptionSummary);
+          setLineDiscounts({});
+          setPromoLines([]);
+          return;
+        }
+
+        const { itemsPayload, payloadToCartLine } = buildPriceCartPayload(standardLines);
+        try {
+          const data = await fetchPriceCart({
+            location: locationId,
+            items: itemsPayload,
+          });
+
+          if (cancelled) return;
+          await applyPriceCartResponse(data, payloadToCartLine, standardLines);
+
+          const regularSummary = {
+            subtotal: parseFloat(data?.subtotal ?? "0") || 0,
+            taxTotal: parseFloat(data?.tax_total ?? "0") || 0,
+            discountTotal: parseFloat(data?.discount_total ?? "0") || 0,
+            grandTotal: parseFloat(data?.grand_total ?? "0") || 0,
+          };
+          setAppliedCoupons([]);
+          setPromoLines([]);
+          setPricing({
+            subtotal: regularSummary.subtotal + subscriptionSummary.subtotal,
+            taxTotal: regularSummary.taxTotal + subscriptionSummary.taxTotal,
+            discountTotal: regularSummary.discountTotal + subscriptionSummary.discountTotal,
+            grandTotal: regularSummary.grandTotal + subscriptionSummary.grandTotal,
+          });
+        } catch (err) {
+          if ((err as any).name === "AbortError") return;
+          console.error("Error pricing mixed subscription cart", err);
+        }
         return;
       }
 
@@ -792,7 +1464,7 @@ export const PosApp: React.FC<Props> = ({
       cancelled = true;
       controller.abort();
     };
-  }, [cart, locationId, manualCouponCodes]);
+  }, [cart, locationId, manualCouponCodes, prepaidSession, subscriptionSession]);
 
   const [now, setNow] = useState(() => new Date());
 
@@ -810,6 +1482,16 @@ export const PosApp: React.FC<Props> = ({
     hour: "2-digit",
     minute: "2-digit",
   });
+  const hasRedeemableLines = cart.some((ln) => Boolean(ln.prepaid));
+  const hasPayableLines = cart.some((ln) => !ln.prepaid);
+  const isRedeemOnlyCart = hasRedeemableLines && !hasPayableLines;
+  const redeemSessionLabel = prepaidSession
+    ? `${prepaidSession.prepaidNumber}${
+        prepaidSession.invoiceNumber ? ` (${prepaidSession.invoiceNumber})` : ""
+      }`
+    : subscriptionSession
+    ? `${subscriptionSession.planName} - ${subscriptionSession.customerName}`
+    : null;
 
   return (
     <div className="flex items-center h-screen w-screen bg-kk-pri-bg">
@@ -843,6 +1525,13 @@ export const PosApp: React.FC<Props> = ({
             active={activeView === "POS"}
             sidebarOpen={sidebarOpen}
             onClick={() => setActiveView("POS")}
+          />
+          <SidebarItem
+            label="Subscriptions"
+            icon={(<TicketPercent />)}
+            active={activeView === "SUBSCRIPTIONS"}
+            sidebarOpen={sidebarOpen}
+            onClick={() => setActiveView("SUBSCRIPTIONS")}
           />
           <SidebarItem
             label="On Hold"
@@ -892,13 +1581,17 @@ export const PosApp: React.FC<Props> = ({
         </header> */}
 
         <main className="flex-1 overflow-hidden">
-          {activeView === "POS" && (
+          {(activeView === "POS" || activeView === "SUBSCRIPTIONS") && (
             <div className="flex h-full">
               <div className="flex-1 bg-kk-pri-bg">
-                <PosScreen
-                  locationId={locationId}
-                  onAddToCart={handleAddToCart}
-                />
+                {activeView === "POS" ? (
+                  <PosScreen
+                    locationId={locationId}
+                    onAddToCart={handleAddToCart}
+                  />
+                ) : (
+                  <SubscriptionsScreen onAddPlanToCart={handleAddSubscriptionPlanToCart} />
+                )}
               </div>
 
               <div className="w-1/3 h-full min-h-0 overflow-hidden border-l border-kk-border bg-kk-sec-bg p-4 flex flex-col">
@@ -925,15 +1618,28 @@ export const PosApp: React.FC<Props> = ({
                     onClearCart={handleClearCart}
                     onClearAction={activeHeldOrder ? handleCancelHeldOrder : handleClearCart}
                     onApplyDiscountCode={applyDiscountFromRaw}
-                    onRedeemEntryPassCode={redeemEntryPassFromRaw}
+                    onAssignCustomerCode={assignCustomerFromRaw}
+                    onRedeemItemsCode={redeemItemsFromRaw}
                     onRemoveDiscount={handleRemoveDiscount}
                     onHoldOrder={handleHoldOrder}
                     locationId={locationId}
+                    assignedCustomerId={assignedCustomer?.contactId ?? null}
+                    assignedPortalCustomerId={assignedCustomer?.portalCustomerId ?? null}
+                    assignedCustomerLabel={assignedCustomer?.name ?? null}
                     holdOrderLabel={activeHeldOrder ? "Put Back On Hold" : "Hold Order"}
-                    clearCartLabel={activeHeldOrder ? "Cancel Held Order" : "Clear Cart"}
+                    clearCartLabel={
+                      isRedeemOnlyCart
+                        ? "Clear Redemption Cart"
+                        : activeHeldOrder
+                        ? "Cancel Held Order"
+                        : "Clear Cart"
+                    }
                     heldOrderName={activeHeldOrder?.customer_name ?? null}
                     holding={holding}
                     onAfterPaymentCompleted={handleAfterPaymentCompleted}
+                    isPrepaidRedeem={isRedeemOnlyCart}
+                    prepaidLabel={redeemSessionLabel}
+                    onRedeemPrepaidInvoice={redeemLoadedItemsFromCart}
                   />
                 </div>
               </div>
