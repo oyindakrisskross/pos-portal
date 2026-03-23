@@ -378,11 +378,6 @@ export const PosApp: React.FC<Props> = ({
 
   const handleAddToCart = (payload: AddToCartPayload) => {
     setCart((prev) => {
-      if (prepaidSession || subscriptionSession) {
-        showToast("Finish or clear the current redemption session before adding regular items.");
-        return prev;
-      }
-
       if (payload.item.inventory_tracking) {
         const stockQty = parseDecimal(payload.item.stock_qty, 0);
         if (stockQty <= 0) {
@@ -416,6 +411,8 @@ export const PosApp: React.FC<Props> = ({
       );
 
       if (existingIndex === -1) {
+        // Standard sale lines can coexist with loaded redeemable lines.
+        // Checkout will charge only the payable lines, then redeem the loaded items.
         return [
           ...prev,
           {
@@ -1620,6 +1617,8 @@ export const PosApp: React.FC<Props> = ({
                     onApplyDiscountCode={applyDiscountFromRaw}
                     onAssignCustomerCode={assignCustomerFromRaw}
                     onRedeemItemsCode={redeemItemsFromRaw}
+                    onLoadLookupSubscription={loadSubscriptionFromToken}
+                    onLoadLookupPrepaid={loadPrepaidFromCode}
                     onRemoveDiscount={handleRemoveDiscount}
                     onHoldOrder={handleHoldOrder}
                     locationId={locationId}

@@ -7,9 +7,10 @@ import { getAppliedCouponNames } from "../helpers/couponDisplay";
 import { ProcessPaymentModal } from "./ProcessPaymentModal";
 import { ReceiptModal } from "./ReceiptModal";
 import type { AppliedCoupon, InvoiceResponse } from "../types/invoice";
-import { CreditCard, Percent, ShoppingCart, StretchVertical, Ticket, Trash2 } from "lucide-react";
+import { CreditCard, Percent, ShoppingCart, StretchVertical, Ticket, Trash2, UserRound } from "lucide-react";
 import { ScanCodeModal } from "./ScanCodeModal";
 import { SlotAnimatedValue } from "./SlotAnimatedValue";
+import { LookupContactModal } from "./LookupContactModal";
 
 
 interface CartPaneProps {
@@ -26,6 +27,8 @@ interface CartPaneProps {
   onApplyDiscountCode: (raw: string) => Promise<{ ok: boolean; error?: string }>;
   onAssignCustomerCode: (raw: string) => Promise<{ ok: boolean; error?: string }>;
   onRedeemItemsCode: (raw: string) => Promise<{ ok: boolean; error?: string }>;
+  onLoadLookupSubscription: (token: string) => Promise<{ ok: boolean; error?: string }>;
+  onLoadLookupPrepaid: (prepaidNumber: string) => Promise<{ ok: boolean; error?: string }>;
   onRemoveDiscount: () => void;
   onHoldOrder?: () => void;
   locationId: number;
@@ -62,6 +65,8 @@ export const CartPane: React.FC<CartPaneProps> = ({
   onApplyDiscountCode,
   onAssignCustomerCode,
   onRedeemItemsCode,
+  onLoadLookupSubscription,
+  onLoadLookupPrepaid,
   holdOrderLabel = "Hold Order",
   clearCartLabel = "Clear Cart",
   heldOrderName = null,
@@ -77,6 +82,7 @@ export const CartPane: React.FC<CartPaneProps> = ({
   const [showApplyDiscount, setShowApplyDiscount] = useState(false);
   const [showAssignCustomer, setShowAssignCustomer] = useState(false);
   const [showRedeemItems, setShowRedeemItems] = useState(false);
+  const [showLookupContact, setShowLookupContact] = useState(false);
   const [showRedeemConfirm, setShowRedeemConfirm] = useState(false);
   const [redeemSubmitting, setRedeemSubmitting] = useState(false);
   const [redeemError, setRedeemError] = useState<string | null>(null);
@@ -263,6 +269,17 @@ export const CartPane: React.FC<CartPaneProps> = ({
 
           <button
             type="button"
+            className="flex h-9 w-9 items-center justify-center rounded-lg border bg-kk-pri-bg text-kk-pri-text disabled:cursor-not-allowed disabled:opacity-60"
+            onClick={() => setShowLookupContact(true)}
+            disabled={hasSubscriptionSaleLines}
+            title="Lookup Contact"
+            aria-label="Lookup Contact"
+          >
+            <UserRound className="h-4 w-4" />
+          </button>
+
+          <button
+            type="button"
             className="flex flex-1 items-center justify-center gap-2 rounded-lg border bg-kk-pri-bg py-2 text-[11px] font-medium text-kk-err disabled:cursor-not-allowed disabled:opacity-60"
             disabled={
               hasRedeemableLines ||
@@ -405,6 +422,14 @@ export const CartPane: React.FC<CartPaneProps> = ({
         subtitle="Please scan redeemable item QR code"
         onClose={() => setShowRedeemItems(false)}
         onCode={onRedeemItemsCode}
+      />
+
+      <LookupContactModal
+        isOpen={showLookupContact}
+        locationId={locationId}
+        onClose={() => setShowLookupContact(false)}
+        onLoadSubscription={onLoadLookupSubscription}
+        onLoadPrepaid={onLoadLookupPrepaid}
       />
 
       {showRedeemConfirm ? (

@@ -2,6 +2,28 @@
 
 /* Only print the receipt content, not the entire app or modal overlay */
 @media print {
+  @page {
+    margin: 0;
+  }
+
+  html,
+  body {
+    margin: 0 !important;
+    padding: 0 !important;
+    background: #fff !important;
+  }
+
+  body {
+    display: block !important;
+    min-height: auto !important;
+  }
+
+  #root {
+    max-width: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+
   /* Hide everything by default */
   body * {
     visibility: hidden;
@@ -17,16 +39,51 @@
   #receipt-print-area {
     position: absolute;
     left: 0;
+    right: 0;
     top: 0;
     width: 100%;
-    background: white;
-    padding: 0.5rem 1rem;
+    max-width: none;
+    min-width: 100%;
+    margin: 0;
+    background: #fff !important;
+    color: #000 !important;
+    overflow: visible !important;
+    padding: var(--receipt-block-padding) var(--receipt-inline-padding);
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  /* Thermal printers render grey and shadows poorly. Force high-contrast output. */
+  #receipt-print-area * {
+    color: #000 !important;
+    border-color: #000 !important;
+    text-shadow: none !important;
+    box-shadow: none !important;
+  }
+
+  #receipt-print-area hr {
+    opacity: 1 !important;
+    border-color: #000 !important;
+  }
+
+  #receipt-print-area h3,
+  #receipt-print-area .font-semibold,
+  #receipt-print-area .font-bold {
+    font-weight: 700 !important;
   }
 
   /* Utility to hide elements that should never print (buttons, overlay, etc.) */
   .no-print {
     display: none !important;
   }
+}
+
+#receipt-print-area {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 100%;
+  margin: 0;
+  padding: var(--receipt-block-padding) var(--receipt-inline-padding);
 }
 
 @theme {
@@ -71,6 +128,9 @@
 }
 
 :root {
+  --receipt-paper-width: 80mm;
+  --receipt-block-padding: 4mm;
+  --receipt-inline-padding: 3mm;
   font-family: system-ui, Avenir, Helvetica, Arial, sans-serif;
   line-height: 1.5;
   font-weight: 400;

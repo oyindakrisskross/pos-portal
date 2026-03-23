@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import type { CartLine, CartPricingSummary } from "../types/catalog";
 import {
   buildPOSCheckoutRequest,
@@ -13,7 +13,7 @@ import type { AppliedCoupon, InvoiceResponse } from "../types/invoice";
 import { checkOut, fetchInvoiceById, fetchPriceCart } from "../api/cart";
 import { formatMoney } from "../helpers/posHelpers";
 import { getAppliedCouponNames } from "../helpers/couponDisplay";
-import { CreditCard, Smartphone } from "lucide-react";
+import { ChevronDown, CreditCard, Search, Smartphone } from "lucide-react";
 import {
   createCustomerSubscription,
   createPortalCustomer,
@@ -70,11 +70,15 @@ export const ProcessPaymentModal: React.FC<ProcessPaymentModalProps> = ({
   const [customersLoading, setCustomersLoading] = useState(false);
   const [customersError, setCustomersError] = useState<string | null>(null);
   const [selectedPortalCustomerId, setSelectedPortalCustomerId] = useState<number | null>(portalCustomerId ?? null);
+  const [selectedPortalCustomer, setSelectedPortalCustomer] = useState<POSCustomerRecord | null>(null);
+  const [customerDropdownOpen, setCustomerDropdownOpen] = useState(false);
   const [showNewCustomerForm, setShowNewCustomerForm] = useState(false);
   const [newCustomerFirstName, setNewCustomerFirstName] = useState("");
   const [newCustomerLastName, setNewCustomerLastName] = useState("");
   const [newCustomerEmail, setNewCustomerEmail] = useState("");
   const [newCustomerPhone, setNewCustomerPhone] = useState("");
+  const customerDropdownRef = useRef<HTMLDivElement | null>(null);
+  const customerSearchInputRef = useRef<HTMLInputElement | null>(null);
 
   const subscriptionSaleLines = useMemo(
     () => cart.filter((line) => Boolean(line.subscriptionSale)),
@@ -89,6 +93,13 @@ export const ProcessPaymentModal: React.FC<ProcessPaymentModalProps> = ({
   const cartIsEmpty = cart.length === 0;
   const hasManualCoupon = (appliedCouponsProp ?? []).some((c) => Boolean(c?.code));
   const hasCheckoutSource = !cartIsEmpty || hasManualCoupon;
+  const selectedCustomer = useMemo(() => {
+    if (!selectedPortalCustomerId) return null;
+    if (selectedPortalCustomer?.id === selectedPortalCustomerId) {
+      return selectedPortalCustomer;
+    }
+    return customers.find((row) => Number(row.id) === Number(selectedPortalCustomerId)) ?? null;
+  }, [customers, selectedPortalCustomer, selectedPortalCustomerId]);
 
   const apiErrorMessage = (err: any, fallback: string) => {
     const data = err?.response?.data;
@@ -198,8 +209,55 @@ export const ProcessPaymentModal: React.FC<ProcessPaymentModalProps> = ({
   }, [customerSearch, isOpen, isSubscriptionCheckout]);
 
   useEffect(() => {
+    if (!selectedPortalCustomerId) {
+      setSelectedPortalCustomer(null);
+      return;
+    }
+    const match = customers.find((row) => Number(row.id) === Number(selectedPortalCustomerId));
+    if (match) {
+      setSelectedPortalCustomer(match);
+    }
+  }, [customers, selectedPortalCustomerId]);
+
+  useEffect(() => {
+    if (!customerDropdownOpen) return;
+
+    const handlePointerDown = (event: MouseEvent) => {
+      if (!customerDropdownRef.current?.contains(event.target as Node)) {
+        setCustomerDropdownOpen(false);
+      }
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setCustomerDropdownOpen(false);
+      }
+    };
+
+    document.addEventListener("mousedown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      document.removeEventListener("mousedown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [customerDropdownOpen]);
+
+  useEffect(() => {
+    if (!customerDropdownOpen) return;
+    customerSearchInputRef.current?.focus();
+  }, [customerDropdownOpen]);
+
+  useEffect(() => {
+    if (showNewCustomerForm) {
+      setCustomerDropdownOpen(false);
+    }
+  }, [showNewCustomerForm]);
+
+  useEffect(() => {
     if (!isOpen) return;
     setSelectedPortalCustomerId(portalCustomerId ?? null);
+    setSelectedPortalCustomer(null);
+    setCustomerDropdownOpen(false);
     setShowNewCustomerForm(false);
     setCustomerSearch("");
     setCustomers([]);
@@ -257,8 +315,9 @@ export const ProcessPaymentModal: React.FC<ProcessPaymentModalProps> = ({
       portalId = Number(created.id);
       contactId = created.contact_id ? Number(created.contact_id) : null;
       setSelectedPortalCustomerId(portalId);
+      setSelectedPortalCustomer(created);
     } else if (portalId && portalId > 0) {
-      const selected = customers.find((row) => Number(row.id) === Number(portalId));
+      const selected = selectedCustomer;
       if (selected?.contact_id) {
         contactId = Number(selected.contact_id);
       }
@@ -461,7 +520,10 @@ export const ProcessPaymentModal: React.FC<ProcessPaymentModalProps> = ({
                 <button
                   type="button"
                   className="cursor-pointer text-xs font-semibold text-kk-hover underline"
-                  onClick={() => setShowNewCustomerForm((prev) => !prev)}
+                  onClick={() => {
+                    setCustomerDropdownOpen(false);
+                    setShowNewCustomerForm((prev) => !prev);
+                  }}
                 >
                   {showNewCustomerForm ? "Select Existing Customer" : "New Customer"}
                 </button>
@@ -469,15 +531,102 @@ export const ProcessPaymentModal: React.FC<ProcessPaymentModalProps> = ({
 
               {!showNewCustomerForm ? (
                 <div className="space-y-2">
-                  <input
-                    type="text"
-                    className="w-full rounded-md border border-kk-border px-3 py-2 text-sm"
-                    placeholder="Search customer by name, phone, or email..."
-                    value={customerSearch}
-                    onChange={(e) => setCustomerSearch(e.target.value)}
-                  />
+                  <div className="relative" ref={customerDropdownRef}>
+                    <button
+                      type="button"
+                      className="flex w-full items-center justify-between rounded-md border border-kk-border px-3 py-2 text-left text-sm"
+                      onClick={() => setCustomerDropdownOpen((prev) => !prev)}
+                      aria-expanded={customerDropdownOpen}
+                      aria-haspopup="listbox"
+                    >
+                      <span
+                        className={`truncate ${selectedPortalCustomerId ? "text-kk-pri-text" : "text-kk-ter-text"}`}
+                      >
+                        {selectedCustomer
+                          ? `${buildCustomerLabel(selectedCustomer)} - ${selectedCustomer.email}`
+                          : selectedPortalCustomerId
+                            ? `Customer #${selectedPortalCustomerId}`
+                            : "Select a customer"}
+                      </span>
+                      <ChevronDown
+                        className={`h-4 w-4 shrink-0 text-kk-ter-text transition-transform ${
+                          customerDropdownOpen ? "rotate-180" : ""
+                        }`}
+                      />
+                    </button>
+
+                    {customerDropdownOpen ? (
+                      <div className="absolute left-0 right-0 z-20 mt-2 overflow-hidden rounded-xl border border-kk-border bg-kk-pri-bg shadow-xl">
+                        <div className="border-b border-kk-border p-2">
+                          <div className="flex items-center gap-2 rounded-md border border-kk-border px-3 py-2">
+                            <Search className="h-4 w-4 text-kk-ter-text" />
+                            <input
+                              ref={customerSearchInputRef}
+                              type="text"
+                              className="w-full bg-transparent text-sm text-kk-pri-text outline-none placeholder:text-kk-ter-text"
+                              placeholder="Search customer by name, phone, or email..."
+                              value={customerSearch}
+                              onChange={(e) => setCustomerSearch(e.target.value)}
+                            />
+                          </div>
+                        </div>
+
+                        <div className="max-h-60 overflow-y-auto py-1">
+                          <button
+                            type="button"
+                            className={`w-full px-3 py-2 text-left text-sm hover:bg-kk-sec-bg ${
+                              !selectedPortalCustomerId ? "bg-kk-sec-bg text-kk-pri-text" : "text-kk-sec-text"
+                            }`}
+                            onClick={() => {
+                              setSelectedPortalCustomerId(null);
+                              setSelectedPortalCustomer(null);
+                              setCustomerSearch("");
+                              setCustomerDropdownOpen(false);
+                            }}
+                          >
+                            Select a customer
+                          </button>
+
+                          {customersLoading ? (
+                            <p className="px-3 py-3 text-xs text-kk-sec-text">Loading customers...</p>
+                          ) : null}
+
+                          {!customersLoading && customers.length
+                            ? customers.map((customer) => {
+                                const isActive = Number(customer.id) === Number(selectedPortalCustomerId);
+                                return (
+                                  <button
+                                    key={customer.id}
+                                    type="button"
+                                    className={`w-full px-3 py-2 text-left hover:bg-kk-sec-bg ${
+                                      isActive ? "bg-kk-sec-bg" : ""
+                                    }`}
+                                    onClick={() => {
+                                      setSelectedPortalCustomerId(Number(customer.id));
+                                      setSelectedPortalCustomer(customer);
+                                      setCustomerSearch("");
+                                      setCustomerDropdownOpen(false);
+                                    }}
+                                  >
+                                    <p className="truncate text-sm font-medium text-kk-pri-text">
+                                      {buildCustomerLabel(customer)}
+                                    </p>
+                                    <p className="truncate text-xs text-kk-sec-text">{customer.email}</p>
+                                  </button>
+                                );
+                              })
+                            : null}
+
+                          {!customersLoading && !customers.length ? (
+                            <p className="px-3 py-3 text-xs text-kk-sec-text">No customers found.</p>
+                          ) : null}
+                        </div>
+                      </div>
+                    ) : null}
+                  </div>
                   <select
-                    className="w-full rounded-md border border-kk-border px-3 py-2 text-sm"
+                    className="hidden"
+                    aria-hidden="true"
                     value={selectedPortalCustomerId ?? ""}
                     onChange={(e) => setSelectedPortalCustomerId(e.target.value ? Number(e.target.value) : null)}
                   >
@@ -488,7 +637,6 @@ export const ProcessPaymentModal: React.FC<ProcessPaymentModalProps> = ({
                       </option>
                     ))}
                   </select>
-                  {customersLoading ? <p className="text-xs text-kk-sec-text">Loading customers...</p> : null}
                   {customersError ? <p className="text-xs text-kk-err">{customersError}</p> : null}
                 </div>
               ) : (

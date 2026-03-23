@@ -42,7 +42,10 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({
         </div>
 
         {/* Body */}
-        <div id="receipt-print-area" className="flex-1 overflow-y-auto px-10 py-4 text-sm font-mono">
+        <div
+          id="receipt-print-area"
+          className="flex-1 overflow-y-auto bg-white text-sm font-medium text-black font-mono"
+        >
           {/* Store header */}
           <div className="mb-4 text-center">
             <h3 className="text-xl font-bold tracking-wide">KRISS KROSS</h3>
