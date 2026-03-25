@@ -19,6 +19,10 @@ export interface BuildCheckoutContext {
   paymentMethod: PaymentMethodCode;
   amountPaid: string;       // e.g. "2150.00"
   customerId?: number | null;
+  subscriptionEntries?: Array<{
+    plan: number;
+    physical_card_serial?: string | null;
+  }>;
   notes?: string;
   couponCode?: string;
   couponCodes?: string[];
@@ -237,6 +241,7 @@ export function buildPOSCheckoutRequest(
     invoice_discount_value: ctx.discountValue ?? "0.00",
     items,
     payments: [payment],
+    subscription_entries: ctx.subscriptionEntries ?? [],
   };
 }
 

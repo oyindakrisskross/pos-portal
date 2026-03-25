@@ -28,6 +28,11 @@ export interface POSCheckoutPaymentInput {
   reference?: string;
 }
 
+export interface POSCheckoutSubscriptionEntryInput {
+  plan: number;
+  physical_card_serial?: string | null;
+}
+
 export interface InvoiceCheckoutPayload {
   location: number;
   customer?: number | null;
@@ -40,6 +45,7 @@ export interface InvoiceCheckoutPayload {
   invoice_discount_value: string;
   items: InvoiceItemInput[];
   payments: POSCheckoutPaymentInput[];
+  subscription_entries?: POSCheckoutSubscriptionEntryInput[];
 }
 
 export interface PriceCartItemInput {

@@ -68,6 +68,7 @@ export async function createCustomerSubscription(payload: {
   amount_paid?: string;
   payment_method?: PaymentMethodCode;
   payment_reference?: string;
+  physical_card_serial?: string | null;
 }) {
   const res = await api.post<POSCustomerSubscriptionRecord>("/api/subscriptions/subscriptions/", payload);
   return res.data;

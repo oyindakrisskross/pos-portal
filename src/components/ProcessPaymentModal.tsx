@@ -10,16 +10,16 @@ import {
   type PaymentMethodCode,
 } from "../helpers/invoiceHelpers";
 import type { AppliedCoupon, InvoiceResponse } from "../types/invoice";
-import { checkOut, fetchInvoiceById, fetchPriceCart } from "../api/cart";
+import { checkOut, fetchPriceCart } from "../api/cart";
 import { formatMoney } from "../helpers/posHelpers";
 import { getAppliedCouponNames } from "../helpers/couponDisplay";
-import { ChevronDown, CreditCard, Search, Smartphone } from "lucide-react";
+import { ChevronDown, CreditCard, ScanLine, Search, Smartphone } from "lucide-react";
 import {
-  createCustomerSubscription,
   createPortalCustomer,
   fetchPortalCustomers,
 } from "../api/subscriptions";
 import type { POSCustomerRecord } from "../types/subscriptions";
+import { ScanCodeModal } from "./ScanCodeModal";
 
 interface ProcessPaymentModalProps {
   isOpen: boolean;
@@ -33,6 +33,15 @@ interface ProcessPaymentModalProps {
 }
 
 type UiPaymentMethod = "POS_TERMINAL" | "BANK_TRANSFER" | "QR_CODE";
+
+type RequiredCardSerialEntry = {
+  key: string;
+  planId: number;
+  planName: string;
+  planCode: string;
+  cardIndex: number;
+  totalCards: number;
+};
 
 const uiToBackendMethod: Record<UiPaymentMethod, PaymentMethodCode> = {
   POS_TERMINAL: "CARD",
@@ -77,6 +86,8 @@ export const ProcessPaymentModal: React.FC<ProcessPaymentModalProps> = ({
   const [newCustomerLastName, setNewCustomerLastName] = useState("");
   const [newCustomerEmail, setNewCustomerEmail] = useState("");
   const [newCustomerPhone, setNewCustomerPhone] = useState("");
+  const [subscriptionCardSerials, setSubscriptionCardSerials] = useState<Record<string, string>>({});
+  const [scanTargetSerialKey, setScanTargetSerialKey] = useState<string | null>(null);
   const customerDropdownRef = useRef<HTMLDivElement | null>(null);
   const customerSearchInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -100,16 +111,64 @@ export const ProcessPaymentModal: React.FC<ProcessPaymentModalProps> = ({
     }
     return customers.find((row) => Number(row.id) === Number(selectedPortalCustomerId)) ?? null;
   }, [customers, selectedPortalCustomer, selectedPortalCustomerId]);
+  const requiredCardSerialEntries = useMemo<RequiredCardSerialEntry[]>(
+    () =>
+      subscriptionSaleLines.flatMap((line) => {
+        const requiresCardSerial = Boolean(line.subscriptionSale?.requiresCardSerial);
+        if (!requiresCardSerial) return [];
+        const qty = Math.max(1, Number(line.quantity || 1));
+        return Array.from({ length: qty }, (_, index) => ({
+          key: `${line.id}:${index}`,
+          planId: Number(line.subscriptionSale?.planId || 0),
+          planName: String(line.subscriptionSale?.planName || "Subscription"),
+          planCode: String(line.subscriptionSale?.planCode || ""),
+          cardIndex: index + 1,
+          totalCards: qty,
+        }));
+      }),
+    [subscriptionSaleLines]
+  );
+  const duplicateCardSerial = useMemo(() => {
+    const seen = new Set<string>();
+    for (const entry of requiredCardSerialEntries) {
+      const normalized = String(subscriptionCardSerials[entry.key] || "").trim().toUpperCase();
+      if (!normalized) continue;
+      const scopedKey = `${entry.planId}:${normalized}`;
+      if (seen.has(scopedKey)) return `${normalized} (${entry.planName})`;
+      seen.add(scopedKey);
+    }
+    return null;
+  }, [requiredCardSerialEntries, subscriptionCardSerials]);
 
   const apiErrorMessage = (err: any, fallback: string) => {
     const data = err?.response?.data;
-    if (typeof data === "string" && data.trim()) return data;
-    if (data?.detail) return String(data.detail);
-    if (data?.message) return String(data.message);
+    const normalize = (message: string) => {
+      const text = String(message || "").trim();
+      const lowered = text.toLowerCase();
+      if (
+        lowered.includes("physical card serial") ||
+        lowered.includes("card serial number is already in use") ||
+        lowered.includes("uniq_subscription_plan_card_serial") ||
+        lowered.includes("duplicate key value violates unique constraint") ||
+        lowered.includes("unique constraint failed")
+      ) {
+        return "This card serial number is already in use.";
+      }
+      return text;
+    };
+    if (typeof data === "string" && data.trim()) return normalize(data);
+    if (data?.detail) return normalize(String(data.detail));
+    if (data?.message) return normalize(String(data.message));
     if (Array.isArray(data?.non_field_errors) && data.non_field_errors[0]) {
-      return String(data.non_field_errors[0]);
+      return normalize(String(data.non_field_errors[0]));
     }
-    return err?.message || fallback;
+    if (data && typeof data === "object") {
+      for (const value of Object.values(data)) {
+        if (typeof value === "string" && value.trim()) return normalize(value);
+        if (Array.isArray(value) && value[0]) return normalize(String(value[0]));
+      }
+    }
+    return normalize(err?.message || fallback);
   };
 
   useEffect(() => {
@@ -266,6 +325,8 @@ export const ProcessPaymentModal: React.FC<ProcessPaymentModalProps> = ({
     setNewCustomerLastName("");
     setNewCustomerEmail("");
     setNewCustomerPhone("");
+    setSubscriptionCardSerials({});
+    setScanTargetSerialKey(null);
     setSubmitError(null);
   }, [isOpen, portalCustomerId]);
 
@@ -287,6 +348,9 @@ export const ProcessPaymentModal: React.FC<ProcessPaymentModalProps> = ({
     : showNewCustomerForm
       ? newCustomerFormValid
       : Boolean(selectedPortalCustomerId && selectedPortalCustomerId > 0);
+  const hasRequiredCardSerials = requiredCardSerialEntries.every((entry) =>
+    Boolean(String(subscriptionCardSerials[entry.key] || "").trim())
+  );
 
   const canSubmit =
     hasCheckoutSource &&
@@ -295,7 +359,9 @@ export const ProcessPaymentModal: React.FC<ProcessPaymentModalProps> = ({
     !!pricing &&
     hasValidPayment &&
     hasValidSubscriptionPayment &&
-    hasRequiredCustomer;
+    hasRequiredCustomer &&
+    hasRequiredCardSerials &&
+    !duplicateCardSerial;
 
   const resolvePortalCheckoutCustomer = async (): Promise<{
     portalId: number;
@@ -332,7 +398,8 @@ export const ProcessPaymentModal: React.FC<ProcessPaymentModalProps> = ({
   const handleSaleSubmit = async (
     checkoutCart: CartLine[],
     checkoutCustomerId: number | null,
-    includeCoupons: boolean
+    includeCoupons: boolean,
+    subscriptionEntries?: Array<{ plan: number; physical_card_serial?: string | null }>
   ): Promise<InvoiceResponse> => {
     if (!canSubmit || !pricing) {
       throw new Error("Payment form is not ready.");
@@ -344,6 +411,7 @@ export const ProcessPaymentModal: React.FC<ProcessPaymentModalProps> = ({
       paymentMethod: uiToBackendMethod[paymentMethod],
       amountPaid,
       customerId: checkoutCustomerId,
+      subscriptionEntries,
       notes: "",
       couponCode: includeCoupons ? appliedCouponCodes[0] ?? "" : "",
       couponCodes: includeCoupons ? appliedCouponCodes : [],
@@ -353,43 +421,33 @@ export const ProcessPaymentModal: React.FC<ProcessPaymentModalProps> = ({
     return invoice;
   };
 
-  const handleSubscriptionSubmit = async (opts: {
-    portalCustomerId: number;
-    sourceInvoiceId?: number | null;
-    recordPayment: boolean;
-  }) => {
-    if (!canSubmit || !pricing) {
-      throw new Error("Payment form is not ready.");
-    }
-    const jobs: Array<Promise<any>> = [];
-    const nowStamp = Date.now();
+  const buildSubscriptionCheckoutEntries = (): Array<{
+    plan: number;
+    physical_card_serial?: string | null;
+  }> => {
+    const entries: Array<{ plan: number; physical_card_serial?: string | null }> = [];
+
     subscriptionSaleLines.forEach((line) => {
       const planId = Number(line.subscriptionSale?.planId || 0);
       if (!planId) return;
 
       const qty = Math.max(1, Number(line.quantity || 1));
+      const requiresCardSerial = Boolean(line.subscriptionSale?.requiresCardSerial);
+
       for (let idx = 0; idx < qty; idx++) {
-        const payload: Parameters<typeof createCustomerSubscription>[0] = {
-          customer: opts.portalCustomerId,
-          plan: planId,
-          payment_made: opts.recordPayment,
-          payment_method: uiToBackendMethod[paymentMethod],
-          payment_reference: `POS-SUB-${nowStamp}-${planId}-${idx + 1}`,
-        };
-        if (opts.sourceInvoiceId && opts.sourceInvoiceId > 0) {
-          payload.source_invoice_id = opts.sourceInvoiceId;
+        const entry: { plan: number; physical_card_serial?: string | null } = { plan: planId };
+        if (requiresCardSerial) {
+          const serialKey = `${line.id}:${idx}`;
+          const normalizedSerial = String(subscriptionCardSerials[serialKey] || "").trim();
+          if (normalizedSerial) {
+            entry.physical_card_serial = normalizedSerial;
+          }
         }
-        jobs.push(
-          createCustomerSubscription(payload)
-        );
+        entries.push(entry);
       }
     });
 
-    if (!jobs.length) {
-      throw new Error("No subscription plans selected in cart.");
-    }
-
-    await Promise.all(jobs);
+    return entries;
   };
 
   const handleSubmit = async () => {
@@ -400,26 +458,17 @@ export const ProcessPaymentModal: React.FC<ProcessPaymentModalProps> = ({
     try {
       if (isSubscriptionCheckout) {
         const selectedCustomer = await resolvePortalCheckoutCustomer();
-
-        if (isMixedCheckout) {
-          if (!selectedCustomer.contactId || selectedCustomer.contactId <= 0) {
-            throw new Error("Selected customer is missing a linked contact record.");
-          }
-          const invoice = await handleSaleSubmit(standardSaleLines, selectedCustomer.contactId, false);
-          await handleSubscriptionSubmit({
-            portalCustomerId: selectedCustomer.portalId,
-            sourceInvoiceId: invoice.id,
-            recordPayment: false,
-          });
-          const refreshedInvoice = await fetchInvoiceById(invoice.id);
-          onPaymentCompleted(refreshedInvoice as InvoiceResponse);
-        } else {
-          await handleSubscriptionSubmit({
-            portalCustomerId: selectedCustomer.portalId,
-            recordPayment: true,
-          });
-          onPaymentCompleted(null);
+        if (!selectedCustomer.contactId || selectedCustomer.contactId <= 0) {
+          throw new Error("Selected customer is missing a linked contact record.");
         }
+        const subscriptionEntries = buildSubscriptionCheckoutEntries();
+        const invoice = await handleSaleSubmit(
+          isMixedCheckout ? standardSaleLines : [],
+          selectedCustomer.contactId,
+          false,
+          subscriptionEntries
+        );
+        onPaymentCompleted(invoice);
       } else {
         const invoice = await handleSaleSubmit(cart, customerId ?? null, true);
         onPaymentCompleted(invoice);
@@ -674,6 +723,62 @@ export const ProcessPaymentModal: React.FC<ProcessPaymentModalProps> = ({
             </section>
           ) : null}
 
+          {requiredCardSerialEntries.length ? (
+            <section className="space-y-3">
+              <div>
+                <h3 className="text-base font-semibold text-kk-pri-text">Physical Card Serials</h3>
+                <p className="mt-1 text-sm text-kk-sec-text">
+                  Enter or scan the serial for each physical subscription card before completing checkout.
+                </p>
+              </div>
+
+              <div className="space-y-3">
+                {requiredCardSerialEntries.map((entry) => (
+                  <div key={entry.key} className="rounded-xl border border-kk-border bg-kk-sec-bg p-3">
+                    <div className="mb-2">
+                      <p className="text-sm font-semibold text-kk-pri-text">
+                        {entry.planName}
+                        {entry.planCode ? ` (${entry.planCode})` : ""}
+                      </p>
+                      <p className="text-xs text-kk-sec-text">
+                        Card {entry.cardIndex} of {entry.totalCards}
+                      </p>
+                    </div>
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        className="w-full rounded-md border border-kk-border px-3 py-2 text-sm"
+                        placeholder="Type or scan physical card serial"
+                        value={subscriptionCardSerials[entry.key] ?? ""}
+                        onChange={(e) =>
+                          setSubscriptionCardSerials((current) => ({
+                            ...current,
+                            [entry.key]: e.target.value,
+                          }))
+                        }
+                      />
+                      <button
+                        type="button"
+                        className="inline-flex items-center gap-2 rounded-md border border-kk-border px-3 py-2 text-sm font-medium text-kk-pri-text"
+                        onClick={() => setScanTargetSerialKey(entry.key)}
+                      >
+                        <ScanLine className="h-4 w-4" />
+                        <span>Scan</span>
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {duplicateCardSerial ? (
+                <p className="text-xs font-semibold text-kk-err">
+                  Physical card serials must be unique within the same subscription plan. Duplicate detected:{" "}
+                  {duplicateCardSerial}
+                </p>
+              ) : null}
+            </section>
+          ) : null}
+
           {submitError ? <p className="text-xs font-semibold text-kk-err">{submitError}</p> : null}
         </div>
 
@@ -698,6 +803,21 @@ export const ProcessPaymentModal: React.FC<ProcessPaymentModalProps> = ({
           </button>
         </div>
       </div>
+
+      <ScanCodeModal
+        isOpen={scanTargetSerialKey != null}
+        title="Scan Physical Card"
+        subtitle="Scan the physical card QR code to populate its serial number."
+        onClose={() => setScanTargetSerialKey(null)}
+        onCode={async (raw) => {
+          const targetKey = scanTargetSerialKey;
+          if (!targetKey) return { ok: false, error: "No serial field selected." };
+          const nextValue = raw.trim();
+          if (!nextValue) return { ok: false, error: "Scanned serial is empty." };
+          setSubscriptionCardSerials((current) => ({ ...current, [targetKey]: nextValue }));
+          return { ok: true };
+        }}
+      />
     </div>
   );
 };

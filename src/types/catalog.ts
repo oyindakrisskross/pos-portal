@@ -114,6 +114,8 @@ export interface CartLine extends AddToCartPayload {
     billingFrequencyUnit: "DAY" | "WEEK" | "MONTH" | "YEAR";
     setupFee: string;
     salesTaxRate?: string | null;
+    usesPhysicalCard?: boolean;
+    requiresCardSerial?: boolean;
   };
 }
 

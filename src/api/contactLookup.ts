@@ -13,6 +13,7 @@ export interface POSLookupSubscriptionSummary {
   subscription_id: number;
   plan_name: string;
   status: string;
+  physical_card_serial?: string | null;
   started_at: string;
   expires_at: string | null;
   total_uses: number | null;
@@ -47,6 +48,7 @@ export interface POSLookupSubscriptionDetail {
   plan_name: string;
   customer_id: number;
   customer_name: string;
+  physical_card_serial?: string | null;
   total_uses: number | null;
   used_uses: number;
   remaining_uses: number | null;
@@ -86,6 +88,8 @@ export interface POSLookupPrepaidDetail {
 }
 
 export type POSLookupAssetDetail = POSLookupSubscriptionDetail | POSLookupPrepaidDetail;
+
+export interface POSLookupCardSubscriptionDetail extends POSLookupSubscriptionDetail {}
 
 export async function searchLookupContacts(q: string) {
   const search = new URLSearchParams();
@@ -127,5 +131,21 @@ export async function fetchLookupAssetDetail(params: {
     asset_id: params.assetId,
     location_id: params.locationId,
   });
+  return res.data;
+}
+
+export async function lookupSubscriptionByPhysicalCard(params: {
+  planId: number;
+  physicalCardSerial: string;
+  locationId: number;
+}) {
+  const res = await api.post<POSLookupCardSubscriptionDetail>(
+    "/api/sales/pos/contact-lookup/subscription-card/",
+    {
+      plan_id: params.planId,
+      physical_card_serial: params.physicalCardSerial,
+      location_id: params.locationId,
+    }
+  );
   return res.data;
 }

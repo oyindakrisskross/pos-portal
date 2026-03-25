@@ -13,15 +13,20 @@ import {
 } from "lucide-react";
 import {
   fetchLookupAssetDetail,
+  lookupSubscriptionByPhysicalCard,
   resolveLookupContact,
   searchLookupContacts,
   verifyLookupContact,
   type POSLookupAssetDetail,
   type POSLookupContactRecord,
   type POSLookupPrepaidSummary,
+  type POSLookupSubscriptionDetail,
   type POSLookupSubscriptionSummary,
   type POSLookupVerifyResponse,
 } from "../api/contactLookup";
+import { fetchSubscriptionPlans } from "../api/subscriptions";
+import type { POSSubscriptionPlan } from "../types/subscriptions";
+import { ScanCodeModal } from "./ScanCodeModal";
 
 type LookupContactModalProps = {
   isOpen: boolean;
@@ -33,13 +38,33 @@ type LookupContactModalProps = {
 
 const apiErrorMessage = (err: any, fallback: string) => {
   const data = err?.response?.data;
-  if (typeof data === "string" && data.trim()) return data;
-  if (data?.detail) return String(data.detail);
-  if (data?.message) return String(data.message);
+  const normalize = (message: string) => {
+    const text = String(message || "").trim();
+    const lowered = text.toLowerCase();
+    if (
+      lowered.includes("physical card serial") ||
+      lowered.includes("card serial number is already in use") ||
+      lowered.includes("uniq_subscription_plan_card_serial") ||
+      lowered.includes("duplicate key value violates unique constraint") ||
+      lowered.includes("unique constraint failed")
+    ) {
+      return "This card serial number is already in use.";
+    }
+    return text;
+  };
+  if (typeof data === "string" && data.trim()) return normalize(data);
+  if (data?.detail) return normalize(String(data.detail));
+  if (data?.message) return normalize(String(data.message));
   if (Array.isArray(data?.non_field_errors) && data.non_field_errors[0]) {
-    return String(data.non_field_errors[0]);
+    return normalize(String(data.non_field_errors[0]));
   }
-  return err?.message || fallback;
+  if (data && typeof data === "object") {
+    for (const value of Object.values(data)) {
+      if (typeof value === "string" && value.trim()) return normalize(value);
+      if (Array.isArray(value) && value[0]) return normalize(String(value[0]));
+    }
+  }
+  return normalize(err?.message || fallback);
 };
 
 const formatDateTime = (value?: string | null) => {
@@ -83,6 +108,7 @@ export const LookupContactModal: React.FC<LookupContactModalProps> = ({
   onLoadSubscription,
   onLoadPrepaid,
 }) => {
+  const [lookupMode, setLookupMode] = useState<"CONTACT" | "CARD">("CONTACT");
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<POSLookupContactRecord[]>([]);
   const [resultsLoading, setResultsLoading] = useState(false);
@@ -96,11 +122,20 @@ export const LookupContactModal: React.FC<LookupContactModalProps> = ({
   const [detailLoadingKey, setDetailLoadingKey] = useState<string | null>(null);
   const [detailError, setDetailError] = useState<string | null>(null);
   const [assetDetail, setAssetDetail] = useState<POSLookupAssetDetail | null>(null);
+  const [cardPlanOptions, setCardPlanOptions] = useState<POSSubscriptionPlan[]>([]);
+  const [cardPlansLoading, setCardPlansLoading] = useState(false);
+  const [cardPlanId, setCardPlanId] = useState<number | "">("");
+  const [cardSerial, setCardSerial] = useState("");
+  const [cardLookupSubmitting, setCardLookupSubmitting] = useState(false);
+  const [cardLookupError, setCardLookupError] = useState<string | null>(null);
+  const [cardLookupResult, setCardLookupResult] = useState<POSLookupSubscriptionDetail | null>(null);
+  const [showCardScanner, setShowCardScanner] = useState(false);
   const [redeeming, setRedeeming] = useState(false);
   const [redeemError, setRedeemError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!isOpen) {
+      setLookupMode("CONTACT");
       setQuery("");
       setResults([]);
       setResultsLoading(false);
@@ -114,6 +149,14 @@ export const LookupContactModal: React.FC<LookupContactModalProps> = ({
       setDetailLoadingKey(null);
       setDetailError(null);
       setAssetDetail(null);
+      setCardPlanOptions([]);
+      setCardPlansLoading(false);
+      setCardPlanId("");
+      setCardSerial("");
+      setCardLookupSubmitting(false);
+      setCardLookupError(null);
+      setCardLookupResult(null);
+      setShowCardScanner(false);
       setRedeeming(false);
       setRedeemError(null);
       return;
@@ -121,7 +164,7 @@ export const LookupContactModal: React.FC<LookupContactModalProps> = ({
   }, [isOpen]);
 
   useEffect(() => {
-    if (!isOpen || selectedContact) return;
+    if (!isOpen || lookupMode !== "CONTACT" || selectedContact) return;
 
     const trimmed = query.trim();
     if (!trimmed) {
@@ -151,11 +194,40 @@ export const LookupContactModal: React.FC<LookupContactModalProps> = ({
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [isOpen, query, selectedContact]);
+  }, [isOpen, lookupMode, query, selectedContact]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+
+    let cancelled = false;
+    const run = async () => {
+      try {
+        setCardPlansLoading(true);
+        const data = await fetchSubscriptionPlans({ status: "ACTIVE", page_size: 300 });
+        if (cancelled) return;
+        setCardPlanOptions(Array.isArray(data?.results) ? data.results : []);
+      } catch {
+        if (cancelled) return;
+        setCardPlanOptions([]);
+      } finally {
+        if (!cancelled) setCardPlansLoading(false);
+      }
+    };
+
+    run();
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen]);
 
   const handleCloseAll = () => {
     if (redeeming) return;
     onClose();
+  };
+
+  const resetCardLookup = () => {
+    setCardLookupError(null);
+    setCardLookupResult(null);
   };
 
   const handleSelectContact = (contact: POSLookupContactRecord) => {
@@ -180,6 +252,41 @@ export const LookupContactModal: React.FC<LookupContactModalProps> = ({
       setResultsError(apiErrorMessage(err, "Unable to resolve lookup code."));
     } finally {
       setResolvingCode(false);
+    }
+  };
+
+  const handleLookupPhysicalCard = async (serialOverride?: string) => {
+    const selectedPlanId = Number(cardPlanId || 0);
+    const normalizedSerial = String(serialOverride ?? cardSerial).trim();
+    if (!selectedPlanId) {
+      const error = "Select a subscription plan before searching by physical card.";
+      setCardLookupError(error);
+      return { ok: false, error };
+    }
+    if (!normalizedSerial) {
+      const error = "Physical card serial is required.";
+      setCardLookupError(error);
+      return { ok: false, error };
+    }
+
+    setCardLookupSubmitting(true);
+    setCardLookupError(null);
+    setCardLookupResult(null);
+    try {
+      const detail = await lookupSubscriptionByPhysicalCard({
+        planId: selectedPlanId,
+        physicalCardSerial: normalizedSerial,
+        locationId,
+      });
+      setCardSerial(normalizedSerial);
+      setCardLookupResult(detail);
+      return { ok: true };
+    } catch (err: any) {
+      const error = apiErrorMessage(err, "Unable to find a subscription for that physical card.");
+      setCardLookupError(error);
+      return { ok: false, error };
+    } finally {
+      setCardLookupSubmitting(false);
     }
   };
 
@@ -255,7 +362,7 @@ export const LookupContactModal: React.FC<LookupContactModalProps> = ({
             <div>
               <h2 className="text-lg font-semibold text-kk-pri-text">Lookup Contact</h2>
               <p className="mt-1 text-sm text-kk-sec-text">
-                Scan a customer or employee QR into the search field, or look up by name, phone number, or email address.
+                Look up by contact details or switch to physical card lookup for exact subscription-card matches.
               </p>
             </div>
             <button
@@ -270,89 +377,252 @@ export const LookupContactModal: React.FC<LookupContactModalProps> = ({
           </div>
 
           <div className="flex flex-1 min-h-0 flex-col gap-4 px-5 py-4">
-            <div className="flex items-center gap-2 rounded-xl border border-kk-border bg-kk-sec-bg px-3 py-2">
-              <Search className="h-4 w-4 shrink-0 text-kk-sec-text" />
-              <input
-                type="text"
-                className="w-full bg-transparent text-sm text-kk-pri-text outline-none placeholder:text-kk-ter-text"
-                placeholder="Search by name, phone number, or email address"
-                value={query}
-                autoFocus
-                onChange={(e) => setQuery(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && looksLikeLookupCode(query)) {
-                    e.preventDefault();
-                    void handleResolveCode();
-                  }
-                }}
-              />
-              <button
-                type="button"
-                className="inline-flex items-center gap-2 rounded-lg border border-kk-border bg-kk-pri-bg px-3 py-1.5 text-xs font-medium text-kk-pri-text disabled:opacity-60"
-                onClick={() => void handleResolveCode()}
-                disabled={!query.trim() || resolvingCode}
-                title="Resolve scanned QR code"
-              >
-                {resolvingCode ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <ScanLine className="h-4 w-4" />}
-                <span>Resolve Code</span>
-              </button>
+            <div className="inline-flex rounded-xl border border-kk-border bg-kk-sec-bg p-1">
+              {[
+                { key: "CONTACT", label: "Lookup Contact" },
+                { key: "CARD", label: "Lookup Physical Card" },
+              ].map((option) => {
+                const active = lookupMode === option.key;
+                return (
+                  <button
+                    key={option.key}
+                    type="button"
+                    className={`rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
+                      active ? "bg-kk-pri-bg text-kk-pri-text shadow-sm" : "text-kk-sec-text"
+                    }`}
+                    onClick={() => {
+                      setLookupMode(option.key as "CONTACT" | "CARD");
+                      setResultsError(null);
+                      setDetailError(null);
+                      setRedeemError(null);
+                    }}
+                  >
+                    {option.label}
+                  </button>
+                );
+              })}
             </div>
 
-            {resultsError ? (
-              <div className="rounded-lg border border-kk-err/30 bg-kk-err/5 px-3 py-2 text-sm text-kk-err">
-                {resultsError}
-              </div>
-            ) : null}
+            {lookupMode === "CONTACT" ? (
+              <>
+                <div className="flex items-center gap-2 rounded-xl border border-kk-border bg-kk-sec-bg px-3 py-2">
+                  <Search className="h-4 w-4 shrink-0 text-kk-sec-text" />
+                  <input
+                    type="text"
+                    className="w-full bg-transparent text-sm text-kk-pri-text outline-none placeholder:text-kk-ter-text"
+                    placeholder="Search by name, phone number, or email address"
+                    value={query}
+                    autoFocus
+                    onChange={(e) => setQuery(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && looksLikeLookupCode(query)) {
+                        e.preventDefault();
+                        void handleResolveCode();
+                      }
+                    }}
+                  />
+                  <button
+                    type="button"
+                    className="inline-flex items-center gap-2 rounded-lg border border-kk-border bg-kk-pri-bg px-3 py-1.5 text-xs font-medium text-kk-pri-text disabled:opacity-60"
+                    onClick={() => void handleResolveCode()}
+                    disabled={!query.trim() || resolvingCode}
+                    title="Resolve scanned QR code"
+                  >
+                    {resolvingCode ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <ScanLine className="h-4 w-4" />}
+                    <span>Resolve Code</span>
+                  </button>
+                </div>
 
-            <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-kk-border bg-kk-sec-bg">
-              <div className="border-b border-kk-border px-4 py-3">
-                <div className="flex items-center gap-2 text-sm font-medium text-kk-pri-text">
-                  <UserRound className="h-4 w-4" />
-                  <span>Matching Contacts</span>
+                {resultsError ? (
+                  <div className="rounded-lg border border-kk-err/30 bg-kk-err/5 px-3 py-2 text-sm text-kk-err">
+                    {resultsError}
+                  </div>
+                ) : null}
+
+                <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-kk-border bg-kk-sec-bg">
+                  <div className="border-b border-kk-border px-4 py-3">
+                    <div className="flex items-center gap-2 text-sm font-medium text-kk-pri-text">
+                      <UserRound className="h-4 w-4" />
+                      <span>Matching Contacts</span>
+                    </div>
+                  </div>
+
+                  <div className="min-h-0 flex-1 overflow-y-auto">
+                    {!query.trim() ? (
+                      <div className="flex h-full flex-col items-center justify-center px-6 py-12 text-center">
+                        <ScanLine className="h-10 w-10 text-kk-ter-text" />
+                        <p className="mt-3 text-sm font-medium text-kk-pri-text">Ready to scan or search</p>
+                        <p className="mt-1 max-w-md text-xs text-kk-sec-text">
+                          Search results will show only the contact name, the last 6 digits of the phone number, and a masked email address.
+                        </p>
+                      </div>
+                    ) : resultsLoading ? (
+                      <div className="flex h-full items-center justify-center gap-2 px-6 py-12 text-sm text-kk-sec-text">
+                        <LoaderCircle className="h-4 w-4 animate-spin" />
+                        <span>Searching contacts...</span>
+                      </div>
+                    ) : !results.length ? (
+                      <div className="flex h-full items-center justify-center px-6 py-12 text-sm text-kk-sec-text">
+                        No contacts matched this search.
+                      </div>
+                    ) : (
+                      <div className="divide-y divide-kk-border">
+                        {results.map((contact) => (
+                          <button
+                            key={contact.contact_id}
+                            type="button"
+                            className="flex w-full items-center justify-between gap-4 px-4 py-3 text-left transition-colors hover:bg-kk-pri-bg"
+                            onClick={() => handleSelectContact(contact)}
+                          >
+                            <div className="min-w-0">
+                              <p className="truncate text-sm font-semibold text-kk-pri-text">{contact.name}</p>
+                              <div className="mt-1 flex flex-wrap gap-3 text-xs text-kk-sec-text">
+                                {contact.masked_phone ? <span>Phone ending {contact.masked_phone}</span> : null}
+                                {contact.masked_email ? <span>{contact.masked_email}</span> : null}
+                              </div>
+                            </div>
+                            <ChevronRight className="h-4 w-4 shrink-0 text-kk-ter-text" />
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </>
+            ) : (
+              <div className="flex min-h-0 flex-1 flex-col gap-4">
+                <div className="rounded-2xl border border-kk-border bg-kk-sec-bg p-4">
+                  <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_auto]">
+                    <div className="grid gap-3">
+                      <label className="flex flex-col gap-1">
+                        <span className="text-xs font-medium text-kk-sec-text">Subscription Plan</span>
+                        <select
+                          value={cardPlanId}
+                          onChange={(e) => {
+                            setCardPlanId(e.target.value ? Number(e.target.value) : "");
+                            resetCardLookup();
+                          }}
+                          className="rounded-lg border border-kk-border bg-kk-pri-bg px-3 py-2 text-sm text-kk-pri-text"
+                        >
+                          <option value="">{cardPlansLoading ? "Loading plans..." : "Select subscription plan"}</option>
+                          {cardPlanOptions
+                            .filter((plan) => Boolean(plan.uses_physical_card))
+                            .map((plan) => (
+                              <option key={plan.id} value={plan.id}>
+                                {plan.name} ({plan.code})
+                              </option>
+                            ))}
+                        </select>
+                      </label>
+                      <label className="flex flex-col gap-1">
+                        <span className="text-xs font-medium text-kk-sec-text">Physical Card Serial</span>
+                        <div className="flex gap-2">
+                          <input
+                            type="text"
+                            className="w-full rounded-lg border border-kk-border bg-kk-pri-bg px-3 py-2 text-sm text-kk-pri-text outline-none"
+                            placeholder="Type or scan physical card serial"
+                            value={cardSerial}
+                            onChange={(e) => {
+                              setCardSerial(e.target.value);
+                              resetCardLookup();
+                            }}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") {
+                                e.preventDefault();
+                                void handleLookupPhysicalCard();
+                              }
+                            }}
+                          />
+                          <button
+                            type="button"
+                            className="inline-flex items-center gap-2 rounded-lg border border-kk-border bg-kk-pri-bg px-3 py-2 text-sm font-medium text-kk-pri-text"
+                            onClick={() => setShowCardScanner(true)}
+                          >
+                            <ScanLine className="h-4 w-4" />
+                            <span>Scan</span>
+                          </button>
+                        </div>
+                      </label>
+                    </div>
+                    <div className="flex items-end">
+                      <button
+                        type="button"
+                        className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-kk-acc px-4 py-2 text-sm font-semibold text-kk-pri-bg disabled:opacity-60 md:w-auto"
+                        onClick={() => void handleLookupPhysicalCard()}
+                        disabled={cardLookupSubmitting}
+                      >
+                        {cardLookupSubmitting ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
+                        <span>Find Card</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  <p className="mt-3 text-xs text-kk-sec-text">
+                    Physical card lookup only returns exact serial matches for the selected subscription plan.
+                  </p>
+                </div>
+
+                {cardLookupError ? (
+                  <div className="rounded-lg border border-kk-err/30 bg-kk-err/5 px-3 py-2 text-sm text-kk-err">
+                    {cardLookupError}
+                  </div>
+                ) : null}
+
+                <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-kk-border bg-kk-sec-bg">
+                  <div className="border-b border-kk-border px-4 py-3">
+                    <div className="flex items-center gap-2 text-sm font-medium text-kk-pri-text">
+                      <ScanLine className="h-4 w-4" />
+                      <span>Physical Card Match</span>
+                    </div>
+                  </div>
+
+                  <div className="min-h-0 flex-1 overflow-y-auto">
+                    {!cardLookupResult ? (
+                      <div className="flex h-full flex-col items-center justify-center px-6 py-12 text-center">
+                        <ScanLine className="h-10 w-10 text-kk-ter-text" />
+                        <p className="mt-3 text-sm font-medium text-kk-pri-text">Ready to search by physical card</p>
+                        <p className="mt-1 max-w-md text-xs text-kk-sec-text">
+                          Select the subscription plan, then type or scan the card serial to find its exact subscription match.
+                        </p>
+                      </div>
+                    ) : (
+                      <div className="p-4">
+                        <button
+                          type="button"
+                          className="w-full rounded-xl border border-kk-border bg-kk-pri-bg px-4 py-3 text-left transition-colors hover:bg-kk-pri-bg/80"
+                          onClick={() => {
+                            setAssetDetail(cardLookupResult);
+                            setRedeemError(null);
+                          }}
+                        >
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0">
+                              <p className="truncate text-sm font-semibold text-kk-pri-text">
+                                {cardLookupResult.plan_name}
+                              </p>
+                              <p className="mt-1 text-xs text-kk-sec-text">
+                                {cardLookupResult.customer_name}
+                              </p>
+                              {cardLookupResult.physical_card_serial ? (
+                                <p className="mt-1 text-xs text-kk-ter-text">
+                                  Card serial: {cardLookupResult.physical_card_serial}
+                                </p>
+                              ) : null}
+                              <p className="mt-1 text-xs text-kk-sec-text">
+                                {cardLookupResult.remaining_uses === null
+                                  ? "Unlimited remaining uses"
+                                  : `${cardLookupResult.remaining_uses} use${cardLookupResult.remaining_uses === 1 ? "" : "s"} remaining`}
+                              </p>
+                            </div>
+                            <ChevronRight className="h-4 w-4 shrink-0 text-kk-ter-text" />
+                          </div>
+                        </button>
+                      </div>
+                    )}
+                  </div>
                 </div>
               </div>
-
-              <div className="min-h-0 flex-1 overflow-y-auto">
-                {!query.trim() ? (
-                  <div className="flex h-full flex-col items-center justify-center px-6 py-12 text-center">
-                    <ScanLine className="h-10 w-10 text-kk-ter-text" />
-                    <p className="mt-3 text-sm font-medium text-kk-pri-text">Ready to scan or search</p>
-                    <p className="mt-1 max-w-md text-xs text-kk-sec-text">
-                      Search results will show only the contact name, the last 6 digits of the phone number, and a masked email address.
-                    </p>
-                  </div>
-                ) : resultsLoading ? (
-                  <div className="flex h-full items-center justify-center gap-2 px-6 py-12 text-sm text-kk-sec-text">
-                    <LoaderCircle className="h-4 w-4 animate-spin" />
-                    <span>Searching contacts...</span>
-                  </div>
-                ) : !results.length ? (
-                  <div className="flex h-full items-center justify-center px-6 py-12 text-sm text-kk-sec-text">
-                    No contacts matched this search.
-                  </div>
-                ) : (
-                  <div className="divide-y divide-kk-border">
-                    {results.map((contact) => (
-                      <button
-                        key={contact.contact_id}
-                        type="button"
-                        className="flex w-full items-center justify-between gap-4 px-4 py-3 text-left transition-colors hover:bg-kk-pri-bg"
-                        onClick={() => handleSelectContact(contact)}
-                      >
-                        <div className="min-w-0">
-                          <p className="truncate text-sm font-semibold text-kk-pri-text">{contact.name}</p>
-                          <div className="mt-1 flex flex-wrap gap-3 text-xs text-kk-sec-text">
-                            {contact.masked_phone ? <span>Phone ending {contact.masked_phone}</span> : null}
-                            {contact.masked_email ? <span>{contact.masked_email}</span> : null}
-                          </div>
-                        </div>
-                        <ChevronRight className="h-4 w-4 shrink-0 text-kk-ter-text" />
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-            </div>
+            )}
           </div>
         </div>
       </div>
@@ -493,6 +763,11 @@ export const LookupContactModal: React.FC<LookupContactModalProps> = ({
                                       ? "Unlimited remaining uses"
                                       : `${subscription.remaining_uses} use${subscription.remaining_uses === 1 ? "" : "s"} remaining`}
                                   </p>
+                                  {subscription.physical_card_serial ? (
+                                    <p className="mt-1 text-xs text-kk-ter-text">
+                                      Card serial: {subscription.physical_card_serial}
+                                    </p>
+                                  ) : null}
                                   {formatDateTime(subscription.started_at) ? (
                                     <p className="mt-1 text-xs text-kk-ter-text">
                                       Started {formatDateTime(subscription.started_at)}
@@ -592,7 +867,7 @@ export const LookupContactModal: React.FC<LookupContactModalProps> = ({
             <div className="flex-1 overflow-y-auto px-5 py-4">
               {assetDetail.kind === "SUBSCRIPTION" ? (
                 <div className="space-y-4">
-                  <div className="grid grid-cols-1 gap-2 md:grid-cols-3">
+                  <div className="grid grid-cols-1 gap-2 md:grid-cols-4">
                     <div className="rounded-xl border border-kk-border bg-kk-sec-bg px-4 py-3">
                       <p className="text-xs uppercase tracking-wide text-kk-ter-text">Customer</p>
                       <p className="mt-1 text-sm font-semibold text-kk-pri-text">{assetDetail.customer_name}</p>
@@ -606,6 +881,12 @@ export const LookupContactModal: React.FC<LookupContactModalProps> = ({
                     <div className="rounded-xl border border-kk-border bg-kk-sec-bg px-4 py-3">
                       <p className="text-xs uppercase tracking-wide text-kk-ter-text">Status</p>
                       <p className="mt-1 text-sm font-semibold text-kk-pri-text">{assetDetail.subscription_status}</p>
+                    </div>
+                    <div className="rounded-xl border border-kk-border bg-kk-sec-bg px-4 py-3">
+                      <p className="text-xs uppercase tracking-wide text-kk-ter-text">Card Serial</p>
+                      <p className="mt-1 text-sm font-semibold text-kk-pri-text">
+                        {assetDetail.physical_card_serial || "-"}
+                      </p>
                     </div>
                   </div>
 
@@ -690,6 +971,19 @@ export const LookupContactModal: React.FC<LookupContactModalProps> = ({
           </div>
         </div>
       ) : null}
+
+      <ScanCodeModal
+        isOpen={showCardScanner}
+        title="Scan Physical Card"
+        subtitle="Select a subscription plan first, then scan the card QR code."
+        onClose={() => setShowCardScanner(false)}
+        onCode={async (raw) => {
+          const nextValue = raw.trim();
+          if (!nextValue) return { ok: false, error: "Scanned serial is empty." };
+          setCardSerial(nextValue);
+          return await handleLookupPhysicalCard(nextValue);
+        }}
+      />
     </>
   );
 };

@@ -484,6 +484,8 @@ export const PosApp: React.FC<Props> = ({
           billingFrequencyUnit: plan.billing_frequency_unit,
           setupFee: String(plan.setup_fee ?? "0.00"),
           salesTaxRate: plan.sales_tax_rate ?? null,
+          usesPhysicalCard: Boolean(plan.uses_physical_card),
+          requiresCardSerial: Boolean(plan.requires_card_serial),
         },
       };
 
